@@ -144,6 +144,9 @@ Project files, captures and audit logs contain internal addressing and hostnames
 
 ## Contributing
 
+Contributors and coding agents: start with [docs/development-plan.md](docs/development-plan.md) (status, architecture, known bugs, TODOs) and [AGENTS.md](AGENTS.md).
+
+
 The project is still in the design phase. Feedback on the [design document](docs/requirements-and-design.md) is welcome.
 
 ## License
