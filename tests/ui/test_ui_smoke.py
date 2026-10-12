@@ -221,3 +221,45 @@ def test_details_show_evidence_and_text_is_not_html(page: Any) -> None:
     page.locator("#type-filters input[value=router]").click()  # trigger a re-render elsewhere
     page.locator("#type-filters input[value=router]").click()
     assert page.locator("#hidden-list img, #details img").count() == 0
+
+
+def test_white_background_screenshot_is_legible_in_dark_mode(server: tuple[str, Any],
+                                                             tmp_path: Path) -> None:
+    """Regression: on a white background, labels must be dark and subnet boxes light, regardless
+    of the OS theme (previously they used the dark-theme palette and were invisible)."""
+    url, _ = server
+    with playwright_api.sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=CHROMIUM, headless=True)
+        context = browser.new_context(viewport={"width": 1400, "height": 850}, bypass_csp=True,
+                                      color_scheme="dark")
+        page = context.new_page()
+        page.goto(f"{url}/#token={TOKEN}")
+        page.wait_for_function("window.netgrapher && window.netgrapher.cy().nodes().length === 10")
+        # Confirm the live (dark) theme really is dark, so the export has something to override.
+        live_text = page.evaluate(
+            "getComputedStyle(document.documentElement).getPropertyValue('--text').trim()"
+        )
+        assert live_text == "#e5e7eb"
+
+        page.get_by_role("button", name="Screenshot").click()
+        dialog = page.locator("#dlg-shot")
+        dialog.locator("select[name=format]").select_option("svg")
+        dialog.locator("select[name=bg]").select_option("white")
+        with page.expect_download() as info:
+            dialog.get_by_role("button", name="Export").click()
+        svg = (tmp_path / info.value.suggested_filename)
+        info.value.save_as(svg)
+        content = svg.read_text()
+
+        # Cytoscape emits colors as rgb(...). Light palette: text #1d2330, subnet-bg #eef2f7.
+        assert 'fill="#ffffff"' in content  # the white background rect
+        assert "rgb(29,35,48)" in content  # dark label text (light-palette --text)
+        assert "rgb(229,231,235)" not in content  # never the dark-theme near-white text (#e5e7eb)
+        assert "rgb(238,242,247)" in content  # light subnet-box fill (#eef2f7)
+        assert "rgb(31,37,48)" not in content  # never the dark-theme subnet fill (#1f2530)
+
+        # The live palette is restored after the export.
+        assert page.evaluate(
+            "getComputedStyle(document.documentElement).getPropertyValue('--text').trim()"
+        ) == "#e5e7eb"
+        browser.close()

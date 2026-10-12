@@ -1,8 +1,45 @@
 // Screenshots (PNG via cytoscape, SVG via svg.js) with optional anonymization (FR-UI-9/10).
 
+import { stylesheet } from "./graph.js";
 import { toSvg } from "./svg.js";
 
 const PREFIX = { subnet: "NET", router: "RTR", host: "HOST", unknown_router: "UNK" };
+
+// The live graph follows the OS light/dark theme, but a screenshot can be drawn on a chosen
+// background. On a white background the dark-theme palette (near-white text, near-black subnet
+// fills) is unreadable, so force the light palette for the export and restore it afterwards.
+// Values mirror the :root light defaults in css/app.css.
+const LIGHT_PALETTE = {
+  "--text": "#1d2330",
+  "--muted": "#6b7280",
+  "--edge": "#8b95a5",
+  "--node-router": "#2563eb",
+  "--node-host": "#64748b",
+  "--node-self": "#059669",
+  "--node-subnet-bg": "#eef2f7",
+  "--node-subnet-border": "#94a3b8",
+  "--node-external": "#7c3aed",
+  "--node-unknown": "#9ca3af",
+  "--bg": "#ffffff",
+};
+
+/** Run `fn` with CSS variables overridden on :root and the cytoscape style rebuilt, then restore. */
+function withPalette(cy, overrides, fn) {
+  if (!overrides) return fn();
+  const root = document.documentElement;
+  const previous = Object.keys(overrides).map((k) => [k, root.style.getPropertyValue(k)]);
+  for (const [k, v] of Object.entries(overrides)) root.style.setProperty(k, v);
+  cy.style(stylesheet());
+  try {
+    return fn();
+  } finally {
+    for (const [k, v] of previous) {
+      if (v) root.style.setProperty(k, v);
+      else root.style.removeProperty(k);
+    }
+    cy.style(stylesheet());
+  }
+}
 
 /** Replace labels with consistent placeholders; returns a function that restores them. */
 export function anonymize(cy, state, keepCustom) {
@@ -49,21 +86,26 @@ function download(blob, filename) {
 }
 
 export function screenshot(cy, state, opts) {
-  const background = opts.bg === "transparent" ? null
-    : opts.bg === "theme" ? getComputedStyle(document.documentElement).getPropertyValue("--bg").trim()
-    : "#ffffff";
-  const restore = opts.anonymize ? anonymize(cy, state, opts.keep) : () => {};
+  // "white" is a fixed light background; force the light palette so text/fills stay legible.
+  // "theme" and "transparent" keep the live palette (they already match it).
+  const palette = opts.bg === "white" ? LIGHT_PALETTE : null;
   const stem = (state.doc.name || "netgrapher").replace(/\.ngraph$/, "");
-  try {
-    if (opts.format === "svg") {
-      const svg = toSvg(cy, { full: opts.scope === "full", scale: Number(opts.scale), background });
-      download(new Blob([svg], { type: "image/svg+xml" }), `${stem}.svg`);
-    } else {
-      const blob = cy.png({ output: "blob", full: opts.scope === "full", scale: Number(opts.scale),
-                            bg: background || undefined });
-      download(blob, `${stem}.png`);
+  withPalette(cy, palette, () => {
+    const background = opts.bg === "transparent" ? null
+      : getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+    const restore = opts.anonymize ? anonymize(cy, state, opts.keep) : () => {};
+    try {
+      if (opts.format === "svg") {
+        const svg = toSvg(cy, { full: opts.scope === "full", scale: Number(opts.scale),
+                                background });
+        download(new Blob([svg], { type: "image/svg+xml" }), `${stem}.svg`);
+      } else {
+        const blob = cy.png({ output: "blob", full: opts.scope === "full",
+                              scale: Number(opts.scale), bg: background || undefined });
+        download(blob, `${stem}.png`);
+      }
+    } finally {
+      restore();
     }
-  } finally {
-    restore();
-  }
+  });
 }
