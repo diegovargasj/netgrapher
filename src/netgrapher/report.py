@@ -98,10 +98,15 @@ def build_report(project: Project) -> str:
             "No routing or redundancy protocols observed; reactive mode (milestone 0.5) can "
             "fill in router paths."
         )
-    if not all_protocols.get("dhcp"):
+    guessed = [
+        e
+        for e in g.entities.values()
+        if e.type is EntityType.SUBNET and e.attrs["prefix_confidence"] < LOW_CONFIDENCE
+    ]
+    if guessed and not all_protocols.get("dhcp"):
         suggestions.append(
-            "No DHCP observed; subnet masks are estimates. Capturing while a client joins "
-            "the network gives exact masks."
+            f"No DHCP observed; {len(guessed)} subnet mask(s) are estimates. Capturing while "
+            "a client joins the network gives exact masks."
         )
     if any(r.get("stats", {}).get("ipv6_skipped") for r in project.runs):
         suggestions.append("IPv6 traffic was present but IPv6 inference is not implemented yet.")

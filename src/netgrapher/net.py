@@ -43,6 +43,14 @@ def is_external(ip: str) -> bool:
     return ipaddress.ip_address(ip).is_global
 
 
+@lru_cache(maxsize=65536)
+def is_ipv4(ip: str) -> bool:
+    try:
+        return ipaddress.ip_address(ip).version == 4
+    except ValueError:
+        return False
+
+
 def ip_sort_key(ip: str) -> tuple[int, int]:
     addr = ipaddress.ip_address(ip)
     return (addr.version, int(addr))

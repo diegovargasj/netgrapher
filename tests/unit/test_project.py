@@ -64,3 +64,21 @@ def test_every_export_format_renders(fmt: ExportFormat) -> None:
     else:
         assert text.startswith("graph netgrapher {")
     assert "192.168.1.0/24" in text
+
+
+def test_dhcp_suggestion_only_when_masks_are_guessed() -> None:
+    from netgrapher.report import build_report
+
+    project = office_project()  # remote /24s are guessed, but DHCP was seen
+    project.runs = [
+        {"id": "r1", "mode": "passive", "source": "file", "stats": {"protocols": {"dhcp": 2}}}
+    ]
+    with_guesses = build_report(project)
+    assert "No DHCP observed" not in with_guesses
+    from synthetic import GW_MAC, LAPTOP_MAC, eth, tcp
+
+    no_dhcp = Project(
+        graph=graph_from_frames([eth(LAPTOP_MAC, GW_MAC, tcp("10.1.0.10", "10.9.0.5", 1, 2))])
+    )
+    report = build_report(no_dhcp)
+    assert "No DHCP observed;" in report and "mask(s) are estimates" in report

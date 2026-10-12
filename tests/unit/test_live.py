@@ -160,3 +160,15 @@ def test_cli_live_run(fake_dumpcap: Path, monkeypatch: pytest.MonkeyPatch) -> No
     assert result.exit_code == 0, result.output
     assert out.exists()
     assert "Capturing passively on eth0 for 0.5s" in result.output
+
+
+def test_ipv6_host_configuration_is_ignored_until_v2(fake_dumpcap: Path) -> None:
+    def host() -> HostConfig:
+        config = fake_host()
+        config.resolvers = ["fe80::1%wlan0", "2001:db8::53", GW]
+        config.neighbors.append(HostNeighbor("fe80::2", "02:00:00:00:00:02", "eth0"))
+        config.routes.append(HostRoute("default", "fe80::1", "eth0"))
+        return config
+
+    project = run_live(source(), LiveOptions(duration_s=0.3, tick_s=0.1), host_config=host)
+    assert not any(":" in eid.split(":", 1)[1] for eid in project.graph.entities)

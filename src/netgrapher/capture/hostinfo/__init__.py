@@ -13,7 +13,7 @@ from typing import Any
 
 from netgrapher.facts.model import FactKind, Provenance, observe
 from netgrapher.facts.store import FactStore
-from netgrapher.net import is_usable_unicast
+from netgrapher.net import is_ipv4, is_usable_unicast
 
 
 @dataclass
@@ -95,7 +95,7 @@ def add_host_facts(store: FactStore, config: HostConfig, run_id: str) -> None:
         if iface.loopback:
             continue
         for addr in iface.addresses:
-            if ":" in addr.ip or not is_usable_unicast(addr.ip):
+            if not is_ipv4(addr.ip) or not is_usable_unicast(addr.ip):
                 continue  # IPv6 inference is v2
             add(
                 FactKind.HOST_ADDRESS,
@@ -107,12 +107,12 @@ def add_host_facts(store: FactStore, config: HostConfig, run_id: str) -> None:
             if config.hostname:
                 add(FactKind.NAME, addr.ip, name=config.hostname.lower(), source="hostcfg")
     for route in config.routes:
-        if route.gateway is not None and not is_usable_unicast(route.gateway):
+        if route.gateway is not None and not is_ipv4(route.gateway):
             continue
         add(FactKind.HOST_ROUTE, route.dst, gateway=route.gateway, iface=route.dev)
     for neigh in config.neighbors:
-        if is_usable_unicast(neigh.ip):
+        if is_ipv4(neigh.ip) and is_usable_unicast(neigh.ip):
             add(FactKind.ARP_BINDING, neigh.ip, mac=neigh.mac, vlan=None)
     for resolver in config.resolvers:
-        if is_usable_unicast(resolver):
+        if is_ipv4(resolver) and is_usable_unicast(resolver):
             add(FactKind.HOST_RESOLVER, resolver)

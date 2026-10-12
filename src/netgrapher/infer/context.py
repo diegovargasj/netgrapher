@@ -13,7 +13,7 @@ from netgrapher.facts.store import FactStore
 from netgrapher.graph.model import Evidence, Graph, Link
 from netgrapher.infer.confidence import noisy_or
 from netgrapher.infer.weights import WEIGHTS
-from netgrapher.net import ip_sort_key, is_external, is_usable_unicast
+from netgrapher.net import ip_sort_key, is_external, is_ipv4, is_usable_unicast
 
 _INITIAL_TTLS = ((64, "unix-like"), (128, "windows"), (255, "network-device"))
 
@@ -99,7 +99,11 @@ class Context:
             self_ips[f.subject].append(f)
         self.self_ips = dict(self_ips)
 
-        self.all_ips = {ip for ip in self._referenced_ips() if is_usable_unicast(ip)}
+        # IPv6 inference is v2: addresses from host configuration (e.g. an IPv6 resolver)
+        # must not leak into the IPv4 rules.
+        self.all_ips = {
+            ip for ip in self._referenced_ips() if is_ipv4(ip) and is_usable_unicast(ip)
+        }
         self._index_names_and_roles()
 
     def _referenced_ips(self) -> Iterable[str]:
