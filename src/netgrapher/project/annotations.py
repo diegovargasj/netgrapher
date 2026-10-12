@@ -50,5 +50,7 @@ def link_default_label(link: Link) -> str:
         return str(link.attrs.get("ip") or "")
     if link.type is LinkType.INFERRED_PATH:
         hops = link.attrs.get("hops")
-        return f"~{hops} hops" if hops is not None else "path"
+        if hops is None:
+            return "path"
+        return f"~{hops} hop" if hops == 1 else f"~{hops} hops"
     return ""

@@ -4,8 +4,107 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>netgrapher</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body>
-  <p>netgrapher UI: not implemented yet (design §11).</p>
+  <header class="toolbar" role="toolbar" aria-label="Project">
+    <span class="brand">netgrapher</span>
+    <button id="btn-open" title="Open a project file">Open</button>
+    <input id="file-open" type="file" accept=".ngraph,application/gzip" hidden>
+    <select id="sel-recent" aria-label="Recent projects"><option value="">Recent…</option></select>
+    <button id="btn-save" title="Save (Ctrl+S)">Save</button>
+    <a id="btn-saveas" class="button" href="/api/project/download" download title="Download a copy">Save as</a>
+    <select id="sel-export" aria-label="Export">
+      <option value="">Export…</option>
+      <option value="graphml">GraphML</option>
+      <option value="gexf">GEXF</option>
+      <option value="json">JSON</option>
+      <option value="dot">DOT</option>
+    </select>
+    <button id="btn-shot" title="Screenshot">Screenshot</button>
+    <span class="sep"></span>
+    <button id="btn-undo" title="Undo (Ctrl+Z)" disabled>Undo</button>
+    <button id="btn-redo" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
+    <span class="sep"></span>
+    <label>Layout
+      <select id="sel-layout">
+        <option value="fcose">Force-directed</option>
+        <option value="dagre">Hierarchical</option>
+      </select>
+    </label>
+    <button id="btn-relayout" title="Recompute the layout (pinned nodes stay)">Re-layout</button>
+    <button id="btn-fit" title="Fit to screen">Fit</button>
+    <span class="grow"></span>
+    <input id="search" type="search" placeholder="Search name, IP, prefix…" aria-label="Search">
+    <button id="btn-report" title="Coverage report">Report</button>
+  </header>
+
+  <aside class="sidebar left" aria-label="Filters">
+    <section>
+      <h2>Show</h2>
+      <div id="type-filters" class="checks"></div>
+      <label class="row">Min. confidence <output id="conf-out">0.00</output></label>
+      <input id="conf-min" type="range" min="0" max="1" step="0.05" value="0">
+      <label class="row">Provenance
+        <select id="prov-filter">
+          <option value="">any</option>
+          <option value="hostcfg">host config</option>
+          <option value="passive">passive</option>
+          <option value="probe">probe</option>
+        </select>
+      </label>
+      <label class="row">Hide range <input id="hide-cidr" placeholder="e.g. 172.16.0.0/12" size="14"></label>
+      <label class="check"><input id="show-hidden" type="checkbox"> Show hidden items faded</label>
+    </section>
+    <section>
+      <h2>Hidden <span id="hidden-count" class="muted"></span></h2>
+      <ul id="hidden-list" class="plain"></ul>
+    </section>
+  </aside>
+
+  <main id="cy" aria-label="Topology graph"></main>
+
+  <aside class="sidebar right" aria-label="Details">
+    <div id="details"><p class="muted">Select a node or link to see its details.</p></div>
+  </aside>
+
+  <footer class="status">
+    <span id="st-name"></span>
+    <span id="st-dirty" class="dirty" hidden title="Unsaved changes">●</span>
+    <span id="st-counts" class="muted"></span>
+    <span id="st-run" class="muted"></span>
+    <span class="grow"></span>
+    <span id="st-msg"></span>
+  </footer>
+
+  <dialog id="dlg-shot">
+    <form method="dialog" class="form">
+      <h2>Screenshot</h2>
+      <label>Format <select name="format"><option value="png">PNG</option><option value="svg">SVG</option></select></label>
+      <label>Area <select name="scope"><option value="full">Whole graph</option><option value="view">Current view</option></select></label>
+      <label>Scale <select name="scale"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label>
+      <label>Background <select name="bg"><option value="white">White</option><option value="transparent">Transparent</option><option value="theme">Theme</option></select></label>
+      <label class="check"><input type="checkbox" name="anonymize"> Anonymize addresses and names</label>
+      <label class="check"><input type="checkbox" name="keep"> …but keep my custom labels</label>
+      <menu><button value="cancel">Cancel</button><button value="ok" class="primary">Export</button></menu>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-report">
+    <form method="dialog" class="form wide">
+      <h2>Coverage report</h2>
+      <pre id="report-text"></pre>
+      <menu><button value="close" class="primary">Close</button></menu>
+    </form>
+  </dialog>
+
+  <script src="/static/vendor/cytoscape/cytoscape.min.js"></script>
+  <script src="/static/vendor/layout-base/layout-base.js"></script>
+  <script src="/static/vendor/cose-base/cose-base.js"></script>
+  <script src="/static/vendor/cytoscape-fcose/cytoscape-fcose.js"></script>
+  <script src="/static/vendor/dagre/dagre.min.js"></script>
+  <script src="/static/vendor/cytoscape-dagre/cytoscape-dagre.js"></script>
+  <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

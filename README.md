@@ -2,7 +2,7 @@
 
 **Builds a map of the routers, subnets and hosts on a network from the traffic it sees, and lets you explore and edit that map interactively.**
 
-> **Status: early development (milestone 0.2).** Passive discovery works today, both live (`discover`, via dumpcap) and from pcap/pcapng files (`discover --read`), along with `info`, `export` and `doctor`. The UI and the active/reactive modes are still *planned*. See [docs/requirements-and-design.md](docs/requirements-and-design.md) for the full specification.
+> **Status: early development (milestone 0.3).** Passive discovery works today, both live (`discover`, via dumpcap) and from pcap/pcapng files (`discover --read`), along with `info`, `export`, `doctor` and the interactive UI (`ui`). Live updates in the UI and the active/reactive modes are still *planned*. See [docs/requirements-and-design.md](docs/requirements-and-design.md) for the full specification.
 
 ---
 
@@ -64,10 +64,11 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 .venv/bin/netgrapher discover --duration 10m -w run.pcapng -o net.ngraph   # live, passive
 .venv/bin/netgrapher discover --read capture.pcapng -o net.ngraph   # or from a file
 .venv/bin/netgrapher info net.ngraph
+.venv/bin/netgrapher ui net.ngraph                                   # opens the UI in your browser
 .venv/bin/netgrapher export net.ngraph --format dot -o net.dot && dot -Tsvg net.dot -o net.svg
 ```
 
-Live capture stops on `--duration`, `--packets`, `--until-converged` or Ctrl-C (press twice to force). Development: `pip install -e . pytest hypothesis mypy ruff`, then `pytest`, `mypy` and `ruff check .`. The tests never capture real traffic: they use a fake dumpcap.
+Live capture stops on `--duration`, `--packets`, `--until-converged` or Ctrl-C (press twice to force). Development: `pip install -e . pytest hypothesis httpx playwright mypy ruff`, then `pytest`, `mypy` and `ruff check .`. The UI tests use your installed Chromium (or `NETGRAPHER_CHROMIUM`) and are skipped without one. The tests never capture real traffic: they use a fake dumpcap.
 
 ## Installation (planned)
 

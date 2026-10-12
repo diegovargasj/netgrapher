@@ -7,8 +7,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 
 @pytest.fixture(autouse=True)
-def _no_real_capture_or_host_access(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Tests must never capture real traffic or read this machine's network configuration.
+def _no_real_capture_or_host_access(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Tests must never capture real traffic, read this machine's network configuration, or
+    write to the user's configuration directory.
 
     Tests that exercise live capture point NETGRAPHER_DUMPCAP at a fake dumpcap and pass a
     fake host configuration explicitly.
@@ -17,6 +18,8 @@ def _no_real_capture_or_host_access(monkeypatch: pytest.MonkeyPatch) -> None:
     from netgrapher.capture import hostinfo
 
     monkeypatch.setenv("NETGRAPHER_DUMPCAP", "/nonexistent/dumpcap-disabled-in-tests")
+    # The UI's recent-projects list lives under XDG_CONFIG_HOME: keep it out of the real home.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
 
     def forbidden() -> hostinfo.HostConfig:
         raise AssertionError("test tried to read the real host configuration")

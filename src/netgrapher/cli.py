@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated
 
 import typer
 
@@ -37,11 +37,6 @@ app = typer.Typer(
 EXIT_RUNTIME = 1
 EXIT_USAGE = 2
 EXIT_ENVIRONMENT = 3
-
-
-def _not_implemented(command: str) -> NoReturn:
-    typer.echo(f"netgrapher {command}: not implemented yet", err=True)
-    raise typer.Exit(EXIT_RUNTIME)
 
 
 def _load(path: Path) -> Project:
@@ -278,7 +273,18 @@ def ui_command(
     no_browser: Annotated[bool, typer.Option(help="Do not open a browser.")] = False,
 ) -> None:
     """Open the interactive UI, optionally with a saved project."""
-    _not_implemented("ui")
+    from netgrapher.server.app import serve
+    from netgrapher.server.state import AppState
+
+    state = AppState()
+    if project is not None:
+        state.open(_load(project), project)
+
+    def ready(url: str) -> None:
+        typer.echo(f"netgrapher UI: {url}")
+        typer.echo("Only this machine can connect. Press Ctrl-C to stop.")
+
+    serve(state, port=port, open_browser=not no_browser, on_ready=ready)
 
 
 @app.command()

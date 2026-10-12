@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v0.3 (milestones 0.1 and 0.2 implemented) |
+| **Status** | Draft v0.4 (milestones 0.1–0.3 implemented) |
 | **Date** | 2026-10-11 |
 | **Author** | diegovargasj |
 
@@ -555,7 +555,8 @@ Rules:
 
 - **Backend:** FastAPI + uvicorn, run either inside the engine (`discover --ui`) or alone (`netgrapher ui`).
 - **Frontend:** static HTML + ES-module JavaScript, **no build step in v1**, served from the Python package.
-- **Libraries (vendored, never from a CDN):** Cytoscape.js, cytoscape-fcose, cytoscape-expand-collapse, cytoscape-elk with elkjs (hierarchical layout). SVG export uses an SVG exporter whose license must be checked (see §17).
+- **Libraries (vendored, never from a CDN, all MIT):** Cytoscape.js 3.30.2, cytoscape-fcose 2.2.0 (with cose-base, layout-base), cytoscape-dagre 2.5.0 with dagre 0.8.5 (hierarchical layout). Versions and SHA-256 hashes are in `web/vendor/README.md` and verified by a test.
+- *Decided in 0.3:* `cytoscape-svg` is GPL-3.0, so SVG export uses netgrapher's own serializer (`js/svg.js`). dagre replaces elkjs (EPL-2.0). Subnet collapsing is implemented directly (hosts hidden, label shows the count) instead of with cytoscape-expand-collapse.
 - **v2:** an optional pywebview wrapper (`netgrapher ui --window`).
 
 ### 11.2 Layout of the screen
@@ -597,7 +598,9 @@ Rules:
 - **Rename:** inline edit or from the details panel. An empty label resets to the default.
 - **Hide / unhide:** cascades as defined in FR-UI-4. A hidden subnet's hosts are hidden *implicitly*: they don't appear in the Hidden panel individually.
 - **Undo/redo:** a client-side command stack. Each command is an annotation patch plus its inverse.
-- **Saving:** annotation patches go to the server immediately (`PATCH`). The server marks the project dirty and autosaves to `<project>.autosave` every 30 s. "Save" writes to the project path.
+- **Saving:** annotation patches go to the server immediately (`PATCH`/batch). The server marks the project dirty and autosaves to `<project>.autosave` every 30 s. "Save" first stores the current position of every visible node (so the graph reopens exactly as it looks; dragged nodes are additionally `pinned`), then writes the project path and removes the autosave file. A project opened by upload has no path: only "Save as" (download) is available.
+- **Filters** are stored in `view.filters` as `entity_types`, `confidence_below`, `provenance_required` and `hide_cidr`.
+- **Untrusted text:** names and labels come from captured traffic. The UI only ever inserts them as text nodes (never HTML), and the SVG exporter escapes them.
 
 ### 11.5 API
 
@@ -751,7 +754,7 @@ netgrapher/
 | Golden | Reference pcaps → expected graph JSON (deterministic, compared after normalization) | `tests/golden`, CI |
 | Fuzz | Decoders and extractors with Hypothesis-generated and mutated packets; must never raise | `tests/fuzz`, CI (short) + nightly (long) |
 | Lab | containerlab topologies (routers + hosts) with a ground-truth YAML. Run all three modes and score subnet/router/link **precision and recall** | `tests/labs`, manual / nightly |
-| UI | API tests (FastAPI TestClient). Playwright smoke tests: open, rename, hide, save, reopen, screenshot | CI |
+| UI | API tests (FastAPI TestClient). Playwright smoke tests against the system Chromium (skipped if absent): rename, hide, undo/redo, filters, collapse, save, reopen, anonymized SVG/PNG screenshots, text-not-HTML. The test browser uses `bypass_csp` because Playwright evaluates predicates with `eval()`. | CI |
 | Safety | Assertions that passive mode sends zero packets, that probes never leave scope, and that the budget and generation limits hold | CI (network namespace) |
 
 Sample pcap sources: the Wireshark SampleCaptures wiki, plus captures generated in the labs. Only pcaps whose licenses allow redistribution go into the repo.
