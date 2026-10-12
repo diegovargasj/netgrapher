@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# netgrapher outputs (may contain confidential network data)
+*.ngraph
+*.ngraph.autosave
+*.audit.jsonl
+*.pcap
+*.pcapng
+!tests/pcaps/*.pcap
+!tests/pcaps/*.pcapng
+
+# Local tooling
+.claude/settings.local.json
+.idea/
+.vscode/
