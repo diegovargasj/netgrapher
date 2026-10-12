@@ -1,6 +1,7 @@
 {
   "aliases": {},
   "annotations": {},
+  "deleted": [],
   "entities": {
     "ext:internet": {
       "addresses": [
@@ -703,6 +704,8 @@
       "stop_reason": "end-of-file"
     }
   ],
+  "user_entities": {},
+  "user_links": {},
   "version": 1,
   "view": {}
 }

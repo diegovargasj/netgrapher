@@ -1,13 +1,13 @@
 // netgrapher UI entry point: loads the project, wires toolbar, panels, graph and shortcuts.
 
-import { api, startSession } from "./api.js";
+import { api, itemPath, startSession } from "./api.js";
 import { h } from "./dom.js";
 import { screenshot } from "./exporting.js";
 import {
   TYPES, applyVisibility, buildElements, edgeData, getFilter, labelOf, nodeData, parentOf,
   parseCidr, placeNewNodes, runLayout, setFilter, stylesheet, visibleLeaves,
 } from "./graph.js";
-import { History } from "./history.js";
+import { History, invert } from "./history.js";
 import { renderDetails, renderHiddenList } from "./panels.js";
 
 const $ = (id) => document.getElementById(id);
@@ -60,14 +60,61 @@ async function applyPatches(items) {
   refresh();
 }
 
-const history = new History(applyPatches, () => {
+const history = new History(() => {
   $("btn-undo").disabled = !history.canUndo;
   $("btn-redo").disabled = !history.canRedo;
 });
 
 async function edit(items) {
+  const inverse = items.map(({ id, patch }) => ({ id, patch: invert(state.annotations[id] || {}, patch) }));
   try {
-    await history.do(items, state.annotations);
+    await history.push({
+      items, inverse,
+      redo: () => applyPatches(items),
+      undo: () => applyPatches(inverse),
+    });
+  } catch (err) {
+    message(err.message, true);
+  }
+}
+
+// Create / delete graph elements. The server broadcasts a user_graph event that updates the
+// view (see applyUserGraph); these commands only drive the API and the undo stack.
+async function addEntity(spec) {
+  let id = null;
+  try {
+    await history.push({
+      redo: async () => { id = (await api("POST", "/api/entities", spec)).id; },
+      undo: async () => { await api("DELETE", `/api/entities/${itemPath(id)}`); },
+    });
+    if (id) select(id);
+  } catch (err) {
+    message(err.message, true);
+    throw err;
+  }
+}
+
+async function addLink(spec) {
+  let id = null;
+  try {
+    await history.push({
+      redo: async () => { id = (await api("POST", "/api/links", spec)).id; },
+      undo: async () => { await api("DELETE", `/api/links/${itemPath(id)}`); },
+    });
+  } catch (err) {
+    message(err.message, true);
+  }
+}
+
+async function remove(id) {
+  const kind = state.doc.entities[id] ? "entities" : "links";
+  let removed = [];
+  try {
+    await history.push({
+      redo: async () => { removed = (await api("DELETE", `/api/${kind}/${itemPath(id)}`)).deleted; },
+      undo: async () => { await api("POST", "/api/restore", { ids: removed }); },
+    });
+    if (state.selected === id) select(null);
   } catch (err) {
     message(err.message, true);
   }
@@ -113,7 +160,7 @@ function toggleCollapse(id) {
   saveView();
 }
 
-const ctx = { state, edit, select, toggleCollapse };
+const ctx = { state, edit, select, toggleCollapse, remove };
 
 // -- graph ----------------------------------------------------------------------------------
 
@@ -141,8 +188,11 @@ function render({ relayout = false, positions = null } = {}) {
       cy.pan(state.view.pan);
     }
   }
-  cy.on("tap", "node, edge", (e) => select(e.target.id()));
-  cy.on("tap", (e) => { if (e.target === cy) select(null); });
+  cy.on("tap", "node, edge", (e) => {
+    if (linkMode && e.target.isNode()) onLinkPick(e.target.id());
+    else select(e.target.id());
+  });
+  cy.on("tap", (e) => { if (e.target === cy) { if (linkMode) setLinkMode(false); else select(null); } });
   cy.on("dbltap", 'node[type = "subnet"]', (e) => toggleCollapse(e.target.id()));
   cy.on("dragfree", "node", (e) => {
     const node = e.target;
@@ -221,6 +271,9 @@ function onEvent(ev) {
     case "annotations":
       applyRemoteAnnotations(ev.annotations);
       break;
+    case "user_graph":
+      applyUserGraph(ev);
+      break;
     case "resync":
       resync();
       break;
@@ -289,6 +342,57 @@ function applyGraph(ev) {
   const freshNodes = cy.collection(fresh.map((id) => cy.getElementById(id)));
   freshNodes.addClass("fresh");
   setTimeout(() => freshNodes.removeClass("fresh"), 5000);
+  refresh();
+}
+
+// A user_graph event carries the full composed entity/link set (discovered + user − deleted).
+// Reconcile the view to it: add new, remove gone, update the rest; keep existing positions.
+function applyUserGraph(ev) {
+  const doc = state.doc;
+  const nextEntities = ev.entities;
+  const nextLinks = ev.links;
+  const fresh = [];
+  cy.batch(() => {
+    for (const id of Object.keys(doc.links)) {
+      if (!(id in nextLinks)) { delete doc.links[id]; cy.getElementById(id).remove(); }
+    }
+    for (const id of Object.keys(doc.entities)) {
+      if (!(id in nextEntities)) {
+        delete doc.entities[id];
+        const node = cy.getElementById(id);
+        node.children().move({ parent: null });
+        node.remove();
+      }
+    }
+    const entries = Object.entries(nextEntities)
+      .sort(([, a], [, b]) => Number(b.type === "subnet") - Number(a.type === "subnet"));
+    for (const [id, entity] of entries) {
+      const existed = id in doc.entities;
+      doc.entities[id] = entity;
+      const parent = parentOf(state, entity);
+      const node = cy.getElementById(id);
+      if (node.empty()) {
+        cy.add({ group: "nodes", data: { ...nodeData(state, id, entity), ...(parent ? { parent } : {}) } });
+        fresh.push(id);
+      } else {
+        node.data(nodeData(state, id, entity));
+        if ((node.parent().nonempty() ? node.parent().id() : null) !== parent) node.move({ parent });
+      }
+    }
+    for (const [id, link] of Object.entries(nextLinks)) {
+      if (link.type === "member") continue;
+      doc.links[id] = link;
+      if (!doc.entities[link.a] || !doc.entities[link.b]) continue;
+      const edge = cy.getElementById(id);
+      if (edge.empty()) cy.add({ group: "edges", data: edgeData(state, id, link) });
+      else edge.data(edgeData(state, id, link));
+    }
+  });
+  doc.seq = ev.seq;
+  applyVisibility(cy, state);
+  if (cy.nodes(":childless").length === fresh.length && fresh.length) runLayout(cy, state, { relayout: true });
+  else placeNewNodes(cy, state, fresh);
+  setDirty(true);
   refresh();
 }
 
@@ -498,6 +602,80 @@ async function refreshRecent() {
   }
 }
 
+// -- creating entities and links ------------------------------------------------------------
+
+const ADD_TITLES = { subnet: "Add network", router: "Add router", host: "Add host", node: "Add node" };
+const ADD_FIELD = {
+  subnet: ["Prefix", "e.g. 10.0.0.0/24"],
+  router: ["IP address", "e.g. 10.0.0.1"],
+  host: ["IP address", "e.g. 10.0.0.42"],
+  node: null, // label only
+};
+
+function openAddDialog(type) {
+  const dialog = $("dlg-add");
+  $("add-title").textContent = ADD_TITLES[type];
+  const field = ADD_FIELD[type];
+  $("add-addr-row").hidden = !field;
+  if (field) {
+    $("add-addr-label").textContent = field[0];
+    $("add-addr").placeholder = field[1];
+  }
+  $("add-addr").value = "";
+  $("add-label").value = "";
+  $("add-error").hidden = true;
+  dialog.returnValue = "";
+  dialog.showModal();
+  dialog.dataset.type = type;
+}
+
+async function submitAddDialog() {
+  const dialog = $("dlg-add");
+  if (dialog.returnValue !== "ok") return;
+  const type = dialog.dataset.type;
+  const addr = $("add-addr").value.trim();
+  const label = $("add-label").value.trim();
+  const spec = { type };
+  if (type === "subnet") spec.prefix = addr;
+  else if (type === "router" || type === "host") spec.ip = addr;
+  if (label) spec.label = label;
+  try {
+    await addEntity(spec);
+  } catch (err) {
+    // Re-open with the error so the user can correct it.
+    openAddDialog(type);
+    $("add-addr").value = addr;
+    $("add-label").value = label;
+    $("add-error").textContent = err.message;
+    $("add-error").hidden = false;
+  }
+}
+
+let linkMode = false;
+let linkSource = null;
+
+function setLinkMode(on) {
+  linkMode = on;
+  linkSource = null;
+  $("btn-link").classList.toggle("primary", on);
+  document.body.classList.toggle("linking", on);
+  cy.elements().unselect();
+  message(on ? "Link mode: click the first node, then the second (Esc to cancel)." : "");
+}
+
+async function onLinkPick(id) {
+  if (!linkSource) {
+    linkSource = id;
+    cy.getElementById(id).select();
+    message(`Linking from ${labelOf(state, id)}… click the second node.`);
+    return;
+  }
+  if (id === linkSource) return;
+  const a = linkSource;
+  setLinkMode(false);
+  await addLink({ type: "inferred-path", a, b: id });
+}
+
 function wireToolbar() {
   $("btn-open").addEventListener("click", () => $("file-open").click());
   $("file-open").addEventListener("change", (e) => {
@@ -549,6 +727,13 @@ function wireToolbar() {
   });
   $("btn-relayout").addEventListener("click", () => render({ relayout: true }));
   $("btn-fit").addEventListener("click", () => cy.fit(cy.elements(":visible"), 30));
+  $("sel-add").addEventListener("change", (e) => {
+    const type = e.target.value;
+    e.target.value = "";
+    if (type) openAddDialog(type);
+  });
+  $("dlg-add").addEventListener("close", submitAddDialog);
+  $("btn-link").addEventListener("click", () => setLinkMode(!linkMode));
   $("btn-pause").addEventListener("click", () => {
     paused = !paused;
     updatePauseButton();
@@ -577,6 +762,12 @@ function wireKeys() {
     } else if (!typing && mod && e.key.toLowerCase() === "y") {
       e.preventDefault();
       history.redo().catch((err) => message(err.message, true));
+    } else if (!typing && (e.key === "Delete" || e.key === "Backspace") && state.selected) {
+      e.preventDefault();
+      remove(state.selected);
+    } else if (e.key === "Escape" && linkMode) {
+      e.preventDefault();
+      setLinkMode(false);
     } else if (!typing && e.key === "F2" && state.selected) {
       e.preventDefault();
       document.querySelector(".label-edit")?.focus();

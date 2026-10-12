@@ -12,6 +12,7 @@ from netgrapher.project.annotations import (
     visible_entities,
     visible_links,
 )
+from netgrapher.project.compose import rendered_entities, rendered_links
 from netgrapher.project.format import Project
 
 
@@ -41,8 +42,9 @@ class ExportGraph:
 
 
 def build_export_graph(project: Project, *, include_hidden: bool = False) -> ExportGraph:
-    entities = project.graph.entities
-    keep = set(entities) if include_hidden else visible_entities(project)
+    entities = rendered_entities(project)
+    all_links = rendered_links(project, entities)
+    keep = set(entities) if include_hidden else visible_entities(project, entities)
     nodes = [
         ExportNode(
             eid,
@@ -54,7 +56,7 @@ def build_export_graph(project: Project, *, include_hidden: bool = False) -> Exp
         for eid, e in sorted(entities.items())
         if eid in keep
     ]
-    links = list(project.graph.links.values()) if include_hidden else visible_links(project, keep)
+    links = list(all_links.values()) if include_hidden else visible_links(project, keep, all_links)
     edges = [
         ExportEdge(
             lk.id,

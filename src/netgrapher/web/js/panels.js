@@ -105,15 +105,20 @@ export function renderDetails(root, ctx, id) {
   });
 
   const conf = entity ? entity.confidence : link.confidence;
+  const isUser = (entity || link).origin === "user";
   root.append(
     input,
-    h("div", { className: "muted" }, `${entity ? entity.type.replace("_", " ") : `${link.type} link`} · ${id} · confidence ${pct(conf)}`),
+    h("div", { className: "muted" },
+      `${entity ? entity.type.replace("_", " ") : `${link.type} link`} · ${id} · confidence ${pct(conf)} `,
+      isUser ? h("span", { className: "badge" }, "added") : null),
     h("div", { className: "actions" },
       h("button", { onclick: () => ctx.edit([{ id, patch: { hidden: ann.hidden ? null : true } }]) },
         ann.hidden ? "Unhide" : "Hide"),
       ann.pinned ? h("button", { onclick: () => ctx.edit([{ id, patch: { pinned: null } }]) }, "Unpin") : null,
       entity?.type === "subnet" ? h("button", { onclick: () => ctx.toggleCollapse(id) },
-        (state.view.collapsed || []).includes(id) ? "Expand hosts" : "Collapse hosts") : null),
+        (state.view.collapsed || []).includes(id) ? "Expand hosts" : "Collapse hosts") : null,
+      h("button", { className: "danger", title: "Remove from the graph (Delete)",
+                    onclick: () => ctx.remove(id) }, "Delete")),
   );
   if (entity) {
     root.append(entityRows(id, entity, ctx));

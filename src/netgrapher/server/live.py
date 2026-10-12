@@ -35,13 +35,21 @@ class LiveSession:
                 if any(old_id in state.project.annotations for old_id in d.aliases) or conflicts:
                     state.dirty = True
             state.seq += 1
+            # User-tombstoned ids must never be re-added by an engine update.
+            tombstoned = set(state.project.deleted)
             event: dict[str, Any] = {
                 "type": "graph",
                 "seq": state.seq,
-                "entities": {eid: entity_payload(graph, eid) for eid in d.added + d.updated},
+                "entities": {
+                    eid: entity_payload(graph, eid)
+                    for eid in d.added + d.updated
+                    if eid not in tombstoned
+                },
                 "removed": d.removed,
                 "links": {
-                    lid: graph.links[lid].to_dict() for lid in d.links_added + d.links_updated
+                    lid: graph.links[lid].to_dict()
+                    for lid in d.links_added + d.links_updated
+                    if lid not in tombstoned
                 },
                 "links_removed": d.links_removed,
                 "aliases": d.aliases,
@@ -72,6 +80,9 @@ class LiveSession:
             project.annotations = state.project.annotations
             project.view = state.project.view
             project.aliases = {**state.project.aliases, **project.aliases}
+            project.user_entities = state.project.user_entities
+            project.user_links = state.project.user_links
+            project.deleted = state.project.deleted
             state.project = project
             state.path = path.resolve()
             state.live = {**(state.live or {}), "running": False}

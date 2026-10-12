@@ -7,15 +7,15 @@ from netgrapher.project.format import Project
 
 
 def default_label(entity: Entity) -> str:
-    if entity.type is EntityType.SUBNET:
+    if entity.type is EntityType.SUBNET and entity.attrs.get("prefix"):
         return str(entity.attrs["prefix"])
-    if entity.type is EntityType.HOST:
+    if entity.type is EntityType.HOST and entity.attrs.get("ip"):
         return str(entity.attrs["ip"])
     if entity.type is EntityType.ROUTER:
         return entity.id.removeprefix("rtr:")
-    if entity.type is EntityType.EXTERNAL:
+    if entity.type is EntityType.EXTERNAL and entity.id == "ext:internet":
         return "Internet"
-    return "?"
+    return str(entity.attrs.get("label") or entity.id)
 
 
 def label_of(project: Project, entity_or_link_id: str, default: str) -> str:
@@ -27,9 +27,8 @@ def is_hidden(project: Project, item_id: str) -> bool:
     return bool(project.annotations.get(item_id, {}).get("hidden"))
 
 
-def visible_entities(project: Project) -> set[str]:
+def visible_entities(project: Project, entities: dict[str, Entity]) -> set[str]:
     """Entities left after manual hiding, with cascade: a hidden subnet hides its hosts."""
-    entities = project.graph.entities
     visible = {eid for eid in entities if not is_hidden(project, eid)}
     for eid, entity in entities.items():
         if entity.type is EntityType.HOST and entity.attrs.get("subnet_id") not in visible:
@@ -37,10 +36,10 @@ def visible_entities(project: Project) -> set[str]:
     return visible
 
 
-def visible_links(project: Project, entities: set[str]) -> list[Link]:
+def visible_links(project: Project, entities: set[str], links: dict[str, Link]) -> list[Link]:
     return [
         link
-        for link in project.graph.links.values()
+        for link in links.values()
         if link.a in entities and link.b in entities and not is_hidden(project, link.id)
     ]
 

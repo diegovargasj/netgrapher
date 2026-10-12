@@ -196,3 +196,98 @@ def test_static_assets_and_vendor_hashes() -> None:
         assert hashlib.sha256((root / "vendor" / rel).read_bytes()).hexdigest() == digest
     index = (root / "index.html").read_text()
     assert "http://" not in index and "https://" not in index  # nothing from the network
+
+
+def test_create_and_delete_user_entities(client: TestClient, state: AppState) -> None:
+    # Create a user subnet and a user host.
+    r = client.post("/api/entities", json={"type": "subnet", "prefix": "172.31.0.0/24"})
+    assert r.status_code == 200
+    assert r.json()["id"] == "net:172.31.0.0/24"
+    assert r.json()["entity"]["origin"] == "user"
+    r = client.post("/api/entities", json={"type": "host", "ip": "172.31.0.9", "label": "NAS"})
+    assert r.status_code == 200 and r.json()["id"] == "host:172.31.0.9"
+
+    doc = client.get("/api/project").json()
+    assert "net:172.31.0.0/24" in doc["entities"] and "host:172.31.0.9" in doc["entities"]
+    assert doc["dirty"] and state.project.user_entities
+
+    # Link them (user link), then it shows up composed.
+    r = client.post(
+        "/api/links",
+        json={
+            "type": "member",
+            "a": "host:172.31.0.9",
+            "b": "net:172.31.0.0/24",
+            "label": "static",
+        },
+    )
+    assert r.status_code == 200
+    lid = r.json()["id"]
+    assert lid in client.get("/api/project").json()["links"]
+
+    # Deleting the subnet tombstones it and the incident link (cascade).
+    r = client.delete("/api/entities/net:172.31.0.0/24")
+    assert r.status_code == 200
+    assert set(r.json()["deleted"]) == {"net:172.31.0.0/24", lid}
+    doc = client.get("/api/project").json()
+    assert "net:172.31.0.0/24" not in doc["entities"]
+    assert lid not in doc["links"]
+    # The host survives, now without a parent subnet.
+    assert doc["entities"]["host:172.31.0.9"]["subnet_id"] is None
+
+
+def test_delete_discovered_entity_is_a_tombstone(client: TestClient, state: AppState) -> None:
+    assert "host:192.168.1.10" in client.get("/api/project").json()["entities"]
+    r = client.delete("/api/entities/host:192.168.1.10")
+    assert r.status_code == 200
+    doc = client.get("/api/project").json()
+    assert "host:192.168.1.10" not in doc["entities"]
+    assert "host:192.168.1.10" in state.project.deleted
+    # The discovered entity is untouched in the engine graph; only tombstoned.
+    assert "host:192.168.1.10" in state.project.graph.entities
+
+
+def test_restore_undoes_a_deletion(client: TestClient) -> None:
+    deleted = client.delete("/api/entities/host:192.168.1.20").json()["deleted"]
+    assert "host:192.168.1.20" not in client.get("/api/project").json()["entities"]
+    r = client.post("/api/restore", json={"ids": deleted})
+    assert r.status_code == 200
+    assert "host:192.168.1.20" in client.get("/api/project").json()["entities"]
+
+
+def test_create_validation(client: TestClient) -> None:
+    assert (
+        client.post("/api/entities", json={"type": "subnet", "prefix": "nope"}).status_code == 422
+    )
+    assert client.post("/api/entities", json={"type": "host", "ip": "1.2.3.999"}).status_code == 422
+    assert (
+        client.post("/api/entities", json={"type": "node"}).status_code == 422
+    )  # node needs label
+    # A subnet that already exists is a conflict.
+    assert (
+        client.post(
+            "/api/entities", json={"type": "subnet", "prefix": "192.168.1.0/24"}
+        ).status_code
+        == 409
+    )
+    # Link to a missing endpoint.
+    assert (
+        client.post(
+            "/api/links", json={"type": "uplink", "a": "rtr:192.168.1.1", "b": "host:10.9.9.9"}
+        ).status_code
+        == 404
+    )
+
+
+def test_user_entities_round_trip(client: TestClient, state: AppState, tmp_path: Path) -> None:
+    client.post("/api/entities", json={"type": "node", "label": "ISP router"})
+    client.delete("/api/entities/host:192.168.1.10")
+    client.post("/api/project/save")
+    reloaded = load(state.path)
+    assert reloaded.user_entities and "host:192.168.1.10" in reloaded.deleted
+    # The composed graph after reload excludes the tombstoned host, includes the user node.
+    from netgrapher.project.compose import rendered_entities
+
+    entities = rendered_entities(reloaded)
+    assert "host:192.168.1.10" not in entities
+    assert any(e.attrs.get("origin") == "user" for e in entities.values())

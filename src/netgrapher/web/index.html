@@ -24,6 +24,15 @@
     </select>
     <button id="btn-shot" title="Screenshot">Screenshot</button>
     <span class="sep"></span>
+    <select id="sel-add" aria-label="Add to graph">
+      <option value="">Add…</option>
+      <option value="subnet">Network</option>
+      <option value="router">Router</option>
+      <option value="host">Host</option>
+      <option value="node">Node</option>
+    </select>
+    <button id="btn-link" title="Draw a link between two nodes">Link</button>
+    <span class="sep"></span>
     <button id="btn-undo" title="Undo (Ctrl+Z)" disabled>Undo</button>
     <button id="btn-redo" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
     <span class="sep"></span>
@@ -90,6 +99,19 @@
       <label class="check"><input type="checkbox" name="anonymize"> Anonymize addresses and names</label>
       <label class="check"><input type="checkbox" name="keep"> …but keep my custom labels</label>
       <menu><button value="cancel">Cancel</button><button value="ok" class="primary">Export</button></menu>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-add">
+    <form method="dialog" class="form">
+      <h2 id="add-title">Add</h2>
+      <label id="add-addr-row">
+        <span id="add-addr-label">Address</span>
+        <input id="add-addr" autocomplete="off" placeholder="e.g. 10.0.0.0/24">
+      </label>
+      <label>Label (optional) <input id="add-label" autocomplete="off"></label>
+      <p id="add-error" class="error" hidden></p>
+      <menu><button value="cancel">Cancel</button><button value="ok" class="primary">Add</button></menu>
     </form>
   </dialog>
 

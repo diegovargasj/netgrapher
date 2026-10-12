@@ -6,7 +6,7 @@ context. Read this top to bottom before changing code. It is the single source o
 spec live in [`requirements-and-design.md`](requirements-and-design.md) (the design doc); this
 doc is the operational companion and must be kept in sync as you work.
 
-Last updated: 2026-10-12 (after milestone 0.5).
+Last updated: 2026-10-12 (milestone 0.5 + UI graph editing).
 
 ---
 
@@ -32,10 +32,11 @@ only as *evidence* for L3 conclusions. Read design doc §1.3 for non-goals.
 | 0.3 | ✅ done | interactive UI viewer (FastAPI + Cytoscape.js), rename/hide/filter/screenshot |
 | 0.4 | ✅ done | live UI during discovery (WebSocket diffs, stable layout, aliases) |
 | 0.5 | ✅ done | active & reactive probing (ICMP/TCP/UDP-trace/PTR, scope, rate limits, budget, dry-run, audit) |
+| 0.5+ | ✅ done | UI graph editing: create/delete nodes, networks and links; user overlay persisted in the project |
 | **1.0** | **⬜ next** | **hardening, lab precision/recall baseline, tuned rule weights, real-network validation, packaging** |
 | 2.x | ⬜ later | IPv6 inference, privileged probe helper, resume/merge, UI-controlled discovery, macOS/Windows |
 
-**Tests:** 147 collected, all passing. **Lint/type:** `ruff` and `mypy --strict` clean.
+**Tests:** 156 collected, all passing. **Lint/type:** `ruff` and `mypy --strict` clean.
 **Python:** 3.11+ (developed on 3.13). **License:** MIT.
 
 ---
@@ -214,6 +215,15 @@ writes it directly; it emits facts through a callback that enqueues them for the
 5. **Scope semantics:** an address is in scope iff it's in the allow list and not denied;
    `allow_public` additionally permits *any* public address (reactive opt-in only). Active mode's
    allow list is exactly the user CIDRs, so it never probes outside them even for public CIDRs.
+6. **The UI can now create and delete graph elements** (0.5+), which supersedes the original
+   "hide only, no delete" decision. It is a **user overlay** stored in the project alongside
+   annotations (`user_entities`, `user_links`, `deleted`), written only by the UI. The engine is
+   still the sole writer of the *discovered* graph; `project/compose.py` merges them into the
+   rendered graph: `(discovered + user) − deleted`. Deleting a discovered element is a tombstone
+   (in `deleted`), so a live run never resurrects it; deleting cascades to incident links; a
+   deleted host whose subnet is gone is reparented to top level. Compose never mutates the engine
+   graph (it copies), so live inference diffs stay stable. See `server/api.py` CRUD endpoints and
+   the `user_graph` WebSocket event.
 
 All five are recorded in the design doc too; keep both in sync if they change.
 
@@ -236,6 +246,10 @@ paths, and latent issues.
   Incremental inference is a real TODO (design §5.3).
 - **Rule weights are guesses** (`infer/weights.py`). They were never calibrated against ground
   truth because `tests/labs/` is empty. Expect precision/recall to need tuning.
+- **User-created `member` links don't reparent** a host into a subnet visually (they are recorded
+  but drawn as containment only, which user links don't drive). The UI's "Link" button always
+  makes an `inferred-path` link, so this is only reachable via the API. A created host *is*
+  auto-parented into a containing discovered subnet by `_containing_subnet` at creation time.
 - **Reactive `/22` sweeps are large** (up to ~1022 ICMP probes) and can exhaust the default budget
   quickly; fine functionally but worth smarter prioritization.
 - **`registry.py` is a dead stub** — either delete it or repurpose it if you ever add capture-based
@@ -300,8 +314,9 @@ From the design process (design doc §19 has the full log):
 - **MIT license, no GPL runtime deps** (hence no scapy; dpkt for parsing). Snaplen default 512.
 - **v1 probes are unprivileged**; privileged helper is v2.
 - **UI = localhost FastAPI + Cytoscape.js**, discovery driven from the CLI in v1.
-- **Project format:** versioned gzipped JSON (`.ngraph`); annotations stored separately with
-  stable ids.
+- **Project format:** versioned gzipped JSON (`.ngraph`); annotations and the user overlay
+  (`user_entities`/`user_links`/`deleted`) stored separately from the discovered graph, with
+  stable ids. (The earlier "hide only, no delete" decision is superseded — see §7.6.)
 
 ## 11. Open questions for the owner (don't guess)
 - Final default numbers after lab calibration (rates/budget/timeouts/weights).

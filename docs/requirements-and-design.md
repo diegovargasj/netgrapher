@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v0.6 (milestones 0.1–0.5 implemented) |
+| **Status** | Draft v0.6 (milestones 0.1–0.5 + UI graph editing) |
 | **Date** | 2026-10-11 |
 | **Author** | diegovargasj |
 
@@ -187,6 +187,9 @@ In scope:
 | FR-UI-16 | The UI MUST be able to attach to a running engine, apply live updates without moving existing nodes, highlight new entities, and offer a "pause updates" control. | MUST | v1 |
 | FR-UI-17 | Search MUST match both custom labels and original identifiers. | MUST | v1 |
 | FR-UI-18 | Starting and stopping discovery from the UI. | SHOULD | v2 |
+| FR-UI-20 | The user MUST be able to create entities (network, router, host, generic node) and links from the UI. Created elements are marked user-origin. | MUST | 0.5+ |
+| FR-UI-21 | The user MUST be able to delete entities and links. Deleting a discovered element tombstones it (a live run never resurrects it); deletion cascades to incident links. | MUST | 0.5+ |
+| FR-UI-22 | Create and delete MUST support undo/redo and be broadcast to other connected clients. | MUST | 0.5+ |
 | FR-UI-19 | A desktop window wrapper (pywebview). | MAY | v2 |
 
 ---
@@ -644,6 +647,25 @@ All endpoints require the session token (passed once in the URL fragment at laun
 - **End of run:** the final graph is published, the user's edits made during the run are kept, the project is saved to `-o`, and the UI stays up until Ctrl-C. `discover --read ... --ui` analyses the file, saves it and then opens it in the UI.
 - The WebSocket handshake is not seen by the HTTP middleware, so the endpoint checks Host, Origin and the session cookie itself. uvicorn needs the `websockets` package for WebSocket support.
 
+### 11.8 Graph editing (user overlay, implemented in 0.5+)
+
+The UI can add and remove graph elements. These edits are a **user overlay** stored in the
+project (`user_entities`, `user_links`, `deleted`), written only by the UI — the engine remains
+the sole writer of the discovered graph. `project/compose.py` renders `(discovered + user) minus
+deleted`; it never mutates the engine graph, so live inference diffs stay stable.
+
+- **Create:** toolbar "Add" -> network (prefix), router/host (IP), or a generic node (label). A
+  created host is auto-parented into a containing discovered subnet. "Link" mode connects two
+  nodes with an `inferred-path` link. Ids are canonical (`net:`/`host:`/`rtr:`) so a created
+  element unifies with discovery if the engine later finds it; generic nodes get a `user:` id.
+- **Delete:** the details-panel "Delete" button or the Delete key. A user element is removed; a
+  discovered element is tombstoned in `deleted` so a live run never re-adds it. Deletion cascades
+  to incident links; a deleted subnet leaves its hosts at top level.
+- **Undo/redo** covers create and delete. Every edit is broadcast to other connected clients via a
+  `user_graph` WebSocket event and persisted on save.
+- Endpoints: `POST /api/entities`, `POST /api/links`, `DELETE /api/entities/{id}`,
+  `DELETE /api/links/{id}`, `POST /api/restore`.
+
 ### 11.7 Screenshot export
 
 - **PNG:** `cy.png({full, scale, bg})`. Scale 1–4×; background transparent, white or theme.
@@ -844,4 +866,5 @@ Sample pcap sources: the Wireshark SampleCaptures wiki, plus captures generated 
 | 2026-10-11 | UI features: rename, hide (manual + filters, no delete), save, open, PNG/SVG screenshots with anonymization. Hosts in collapsible subnet containers. |
 | 2026-10-11 | Annotations stored separately with stable IDs. Resume/merge designed now, implemented in v2. |
 | 2026-10-11 | Project format: versioned gzipped JSON (`.ngraph`). |
+| 2026-10-12 | UI graph editing (create/delete nodes, networks, links) added as a user overlay; supersedes the earlier hide-only decision. |
 | 2026-10-11 | License: MIT. |

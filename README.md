@@ -42,6 +42,7 @@ Safety measures in the scanning modes: rate limits, a probe budget, a generation
   - rename routers, subnets, hosts and links, and add notes;
   - hide items one by one or with filters (type, confidence, provenance, address range);
   - collapsible subnets, force-directed or hierarchical layout, search;
+  - add or delete networks, routers, hosts and links by hand, and draw connections;
   - details panel showing the evidence behind each element;
   - live updates while discovery is running;
   - undo/redo and autosave.

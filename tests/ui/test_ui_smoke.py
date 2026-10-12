@@ -89,6 +89,12 @@ def page(server: tuple[str, Any], tmp_path: Path) -> Iterator[Any]:
 
 
 def click_node(page: Any, node_id: str, *, double: bool = False) -> None:
+    # Pan the node to the viewport centre first, so the click always lands on it even after the
+    # layout has shifted nodes off-screen (panning is something a user would do too).
+    page.evaluate(
+        "id => { const cy = window.netgrapher.cy(); cy.center(cy.getElementById(id)); }", node_id
+    )
+    page.wait_for_timeout(60)
     box = page.locator("#cy").bounding_box()
     pos = page.evaluate(
         "id => window.netgrapher.cy().getElementById(id).renderedPosition()", node_id
@@ -98,6 +104,27 @@ def click_node(page: Any, node_id: str, *, double: bool = False) -> None:
         page.mouse.dblclick(x, y)
     else:
         page.mouse.click(x, y)
+
+
+def fit(page: Any) -> None:
+    """Fit the graph so every node is within the viewport (clicks need on-screen nodes)."""
+    page.get_by_role("button", name="Fit", exact=True).click()
+    page.wait_for_timeout(100)
+
+
+def select_node(page: Any, node_id: str) -> None:
+    """Click a node and wait until it is the selected one (robust against the click missing)."""
+    for _ in range(3):
+        fit(page)
+        click_node(page, node_id)
+        try:
+            page.wait_for_function(
+                f"window.netgrapher.state.selected === '{node_id}'", timeout=2000
+            )
+            return
+        except Exception:
+            continue
+    raise AssertionError(f"could not select {node_id}")
 
 
 def annotation(page: Any, item_id: str) -> dict[str, Any]:
@@ -223,15 +250,17 @@ def test_details_show_evidence_and_text_is_not_html(page: Any) -> None:
     assert page.locator("#hidden-list img, #details img").count() == 0
 
 
-def test_white_background_screenshot_is_legible_in_dark_mode(server: tuple[str, Any],
-                                                             tmp_path: Path) -> None:
+def test_white_background_screenshot_is_legible_in_dark_mode(
+    server: tuple[str, Any], tmp_path: Path
+) -> None:
     """Regression: on a white background, labels must be dark and subnet boxes light, regardless
     of the OS theme (previously they used the dark-theme palette and were invisible)."""
     url, _ = server
     with playwright_api.sync_playwright() as p:
         browser = p.chromium.launch(executable_path=CHROMIUM, headless=True)
-        context = browser.new_context(viewport={"width": 1400, "height": 850}, bypass_csp=True,
-                                      color_scheme="dark")
+        context = browser.new_context(
+            viewport={"width": 1400, "height": 850}, bypass_csp=True, color_scheme="dark"
+        )
         page = context.new_page()
         page.goto(f"{url}/#token={TOKEN}")
         page.wait_for_function("window.netgrapher && window.netgrapher.cy().nodes().length === 10")
@@ -247,7 +276,7 @@ def test_white_background_screenshot_is_legible_in_dark_mode(server: tuple[str, 
         dialog.locator("select[name=bg]").select_option("white")
         with page.expect_download() as info:
             dialog.get_by_role("button", name="Export").click()
-        svg = (tmp_path / info.value.suggested_filename)
+        svg = tmp_path / info.value.suggested_filename
         info.value.save_as(svg)
         content = svg.read_text()
 
@@ -259,7 +288,67 @@ def test_white_background_screenshot_is_legible_in_dark_mode(server: tuple[str, 
         assert "rgb(31,37,48)" not in content  # never the dark-theme subnet fill (#1f2530)
 
         # The live palette is restored after the export.
-        assert page.evaluate(
-            "getComputedStyle(document.documentElement).getPropertyValue('--text').trim()"
-        ) == "#e5e7eb"
+        assert (
+            page.evaluate(
+                "getComputedStyle(document.documentElement).getPropertyValue('--text').trim()"
+            )
+            == "#e5e7eb"
+        )
         browser.close()
+
+
+def node_count(page: Any) -> int:
+    return page.evaluate("window.netgrapher.cy().nodes().length")
+
+
+def test_create_delete_and_link_entities(page: Any, server: tuple[str, Any]) -> None:
+    _, state = server
+    before = node_count(page)
+
+    # Add a host via the toolbar; it should land inside the discovered 10.0.0.0/24 subnet.
+    page.locator("#sel-add").select_option("host")
+    dialog = page.locator("#dlg-add")
+    dialog.locator("#add-addr").fill("10.0.0.50")
+    dialog.get_by_role("button", name="Add", exact=True).click()
+    page.wait_for_function("window.netgrapher.cy().getElementById('host:10.0.0.50').nonempty()")
+    assert node_count(page) == before + 1
+    assert (
+        page.evaluate("window.netgrapher.cy().getElementById('host:10.0.0.50').parent().id()")
+        == "net:10.0.0.0/24"
+    )
+    assert state.project.user_entities["host:10.0.0.50"]["origin"] == "user"
+
+    # Delete a discovered host via the details panel; it disappears but stays in the engine graph.
+    select_node(page, "host:192.168.1.10")
+    page.get_by_role("button", name="Delete", exact=True).click()
+    page.wait_for_function("window.netgrapher.cy().getElementById('host:192.168.1.10').empty()")
+    assert "host:192.168.1.10" in state.project.deleted
+    assert "host:192.168.1.10" in state.project.graph.entities  # engine graph untouched
+
+    # Undo restores it.
+    page.keyboard.press("Control+z")
+    page.wait_for_function("window.netgrapher.cy().getElementById('host:192.168.1.10').nonempty()")
+    assert "host:192.168.1.10" not in state.project.deleted
+
+    # Link mode: connect two top-level routers (unambiguous clicks, no existing edge between them).
+    links_before = page.evaluate("window.netgrapher.cy().edges().length")
+    page.get_by_role("button", name="Link", exact=True).click()
+    click_node(page, GW)
+    page.wait_for_function(f"window.netgrapher.cy().getElementById('{GW}').selected()")
+    click_node(page, "rtr:10.0.0.2")
+    page.wait_for_function(f"window.netgrapher.cy().edges().length === {links_before + 1}")
+    user_link = next(iter(state.project.user_links))
+    assert state.project.user_links[user_link]["type"] == "inferred-path"
+
+
+def test_delete_subnet_cascades_in_ui(page: Any, server: tuple[str, Any]) -> None:
+    _, state = server
+    select_node(page, "net:10.20.0.0/24")
+    page.get_by_role("button", name="Delete", exact=True).click()
+    page.wait_for_function("window.netgrapher.cy().getElementById('net:10.20.0.0/24').empty()")
+    # Its inferred-path link from the gateway is gone too.
+    assert not page.evaluate(
+        "window.netgrapher.cy().getElementById("
+        "'lnk:inferred-path:rtr:192.168.1.1|net:10.20.0.0/24').nonempty()"
+    )
+    assert "net:10.20.0.0/24" in state.project.deleted

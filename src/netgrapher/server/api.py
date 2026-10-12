@@ -21,8 +21,10 @@ from fastapi import (
 from pydantic import BaseModel, ConfigDict, Field
 
 from netgrapher.export import ExportFormat, export_project
-from netgrapher.graph.ids import AliasTable
-from netgrapher.graph.model import Graph
+from netgrapher.graph.ids import AliasTable, link_id
+from netgrapher.graph.model import Entity, EntityType, Graph, Link
+from netgrapher.project.compose import rendered_entities, rendered_links
+from netgrapher.project.format import Project
 from netgrapher.project.store import ProjectError, dumps, load, loads
 from netgrapher.report import build_report
 from netgrapher.server.auth import COOKIE, token_matches
@@ -76,15 +78,111 @@ class OpenPath(BaseModel):
     path: str
 
 
+class EntitySpec(BaseModel):
+    """User-created entity: subnet needs a prefix; host/router need an ip; a node needs a label."""
+
+    model_config = ConfigDict(extra="forbid")
+    type: str = Field(pattern=r"^(subnet|router|host|external|node)$")
+    prefix: str | None = Field(default=None, max_length=64)
+    ip: str | None = Field(default=None, max_length=64)
+    label: str | None = Field(default=None, max_length=200)
+
+    def _net(self) -> Any:
+        import ipaddress
+
+        try:
+            return ipaddress.ip_network(self.prefix or "", strict=False)
+        except ValueError as exc:
+            raise HTTPException(422, f"invalid prefix: {self.prefix!r}") from exc
+
+    def _addr(self) -> Any:
+        import ipaddress
+
+        try:
+            return ipaddress.ip_address(self.ip or "")
+        except ValueError as exc:
+            raise HTTPException(422, f"invalid IP address: {self.ip!r}") from exc
+
+    def entity_id(self) -> str:
+        if self.type == "subnet":
+            return f"net:{self._net()}"
+        if self.type == "host":
+            return f"host:{self._addr()}"
+        if self.type == "router":
+            return f"rtr:{self._addr()}"
+        if not self.label:
+            raise HTTPException(422, "a node needs a label")
+        import hashlib
+
+        return "user:" + hashlib.sha1(self.label.encode()).hexdigest()[:10]
+
+    def attrs(self) -> dict[str, Any]:
+        base: dict[str, Any] = {"type": self.type, "confidence": 1.0, "origin": "user"}
+        if self.label:
+            base["label"] = self.label
+        if self.type == "subnet":
+            net = self._net()
+            base.update(prefix=str(net), version=net.version, prefix_confidence=1.0,
+                        kind="user", gateway_ids=[], dhcp_servers=[])
+        elif self.type == "host":
+            base.update(ip=str(self._addr()), subnet_id=None, names=[], roles=[],
+                        hop_distance=None, os_family_guess=None, is_self=False,
+                        l2_evidence={"macs": []})
+        elif self.type == "router":
+            base.update(interfaces=[{"ip": str(self._addr()), "subnet": None, "confidence": 1.0,
+                                     "virtual": False}], names=[], roles=[], protocols=[],
+                        router_ids=[], hop_distance=None, l2_evidence={"macs": []})
+        else:  # external / node
+            base["type"] = "external"
+            base.update(asn=None, as_name=None, host_count=0, addresses=[])
+        return base
+
+
+class LinkSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: str = Field(default="inferred-path",
+                      pattern=r"^(member|interface|inferred-path|uplink)$")
+    a: str = Field(max_length=256)
+    b: str = Field(max_length=256)
+    label: str | None = Field(default=None, max_length=200)
+
+
+class RestoreSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[str] = Field(max_length=20_000)
+
+
 def build_router(state: AppState, token: str, allowed_hosts: Callable[[], set[str]]) -> APIRouter:
     router = APIRouter(prefix="/api")
 
     def resolve(item_id: str) -> str:
         project = state.project
         resolved = AliasTable(project.aliases).resolve(item_id)
-        if resolved not in project.graph.entities and resolved not in project.graph.links:
+        known = (
+            resolved in project.graph.entities
+            or resolved in project.graph.links
+            or resolved in project.user_entities
+            or resolved in project.user_links
+        )
+        if not known:
             raise HTTPException(404, f"unknown entity or link: {item_id}")
         return resolved
+
+    def broadcast_user_graph() -> None:
+        with state.lock:
+            state.seq += 1
+            state.dirty = True
+            entities, links = _composed(state.project)
+            event = {
+                "type": "user_graph",
+                "seq": state.seq,
+                "entities": {
+                    eid: _entity_payload(state.project, entities, eid) for eid in entities
+                },
+                "links": {lid: lk.to_dict() for lid, lk in links.items()},
+                "deleted": list(state.project.deleted),
+            }
+        state.bus.publish(event)
 
     def apply(item_id: str, patch: AnnotationPatch) -> dict[str, Any]:
         annotations = state.project.annotations
@@ -121,7 +219,9 @@ def build_router(state: AppState, token: str, allowed_hosts: Callable[[], set[st
         with state.lock:
             resolved = resolve(item_id)
             graph = state.project.graph
-            item = graph.entities.get(resolved) or graph.links[resolved]
+            item = graph.entities.get(resolved) or graph.links.get(resolved)
+            if item is None:
+                return []  # user-created element: no discovery evidence
             return [
                 {"id": e, **graph.evidence[e].to_dict()}
                 for e in item.evidence
@@ -177,6 +277,73 @@ def build_router(state: AppState, token: str, allowed_hosts: Callable[[], set[st
             return
         finally:
             state.bus.unsubscribe(queue)
+
+    @router.post("/entities")
+    def create_entity(spec: EntitySpec) -> dict[str, Any]:
+        with state.lock:
+            project = state.project
+            eid = spec.entity_id()
+            rendered = set(rendered_entities(project))
+            if eid in rendered:
+                raise HTTPException(409, f"{eid} already exists")
+            project.deleted[:] = [d for d in project.deleted if d != eid]  # un-tombstone if needed
+            attrs = spec.attrs()
+            if spec.type == "host" and spec.ip:
+                attrs["subnet_id"] = _containing_subnet(rendered_entities(project), spec.ip)
+            project.user_entities[eid] = attrs
+        broadcast_user_graph()
+        with state.lock:
+            entities, _ = _composed(state.project)
+            return {"id": eid, "entity": _entity_payload(state.project, entities, eid)}
+
+    @router.post("/links")
+    def create_link(spec: LinkSpec) -> dict[str, Any]:
+        with state.lock:
+            project = state.project
+            rendered = set(rendered_entities(project))
+            if spec.a not in rendered or spec.b not in rendered:
+                raise HTTPException(404, "both endpoints must exist")
+            if spec.a == spec.b:
+                raise HTTPException(422, "a link needs two distinct endpoints")
+            lid = link_id(spec.type, spec.a, spec.b)
+            existing = set(rendered_links(project, rendered_entities(project)))
+            if lid in existing:
+                raise HTTPException(409, "that link already exists")
+            project.deleted[:] = [d for d in project.deleted if d != lid]
+            project.user_links[lid] = {"type": spec.type, "a": spec.a, "b": spec.b,
+                                       **({"label": spec.label} if spec.label else {})}
+        broadcast_user_graph()
+        with state.lock:
+            _, links = _composed(state.project)
+            return {"id": lid, "link": links[lid].to_dict()}
+
+    @router.delete("/entities/{item_id:path}")
+    def delete_entity(item_id: str) -> dict[str, Any]:
+        with state.lock:
+            resolved = resolve(item_id)
+            entities = rendered_entities(state.project)
+            if resolved not in entities:
+                raise HTTPException(404, f"{item_id} is not in the graph")
+            removed = _delete(state.project, resolved, entities)
+        broadcast_user_graph()
+        return {"deleted": removed}
+
+    @router.delete("/links/{item_id:path}")
+    def delete_link(item_id: str) -> dict[str, Any]:
+        with state.lock:
+            resolved = resolve(item_id)
+            if resolved not in state.project.deleted:
+                state.project.deleted.append(resolved)
+        broadcast_user_graph()
+        return {"deleted": [resolved]}
+
+    @router.post("/restore")
+    def restore(body: RestoreSpec) -> dict[str, Any]:
+        with state.lock:
+            keep = set(body.ids)
+            state.project.deleted[:] = [d for d in state.project.deleted if d not in keep]
+        broadcast_user_graph()
+        return {"restored": body.ids}
 
     @router.put("/view")
     def put_view(view: View) -> dict[str, Any]:
@@ -259,6 +426,7 @@ def _safe(name: str) -> str:
 
 
 def entity_payload(graph: Graph, eid: str) -> dict[str, Any]:
+    """Payload for a discovered entity from an engine graph (used by live diffs)."""
     entity = graph.entities[eid]
     provenance = sorted(
         {
@@ -268,13 +436,54 @@ def entity_payload(graph: Graph, eid: str) -> dict[str, Any]:
             for part in graph.evidence[e].provenance.split("+")
         }
     )
-    return {**entity.to_dict(), "provenance": provenance}
+    return {**entity.to_dict(), "origin": "discovered", "provenance": provenance}
+
+
+def _containing_subnet(entities: dict[str, Entity], ip: str) -> str | None:
+    """The id of a rendered subnet whose prefix contains `ip` (most specific), else None."""
+    import ipaddress
+
+    addr = ipaddress.ip_address(ip)
+    best: tuple[int, str] | None = None
+    for eid, entity in entities.items():
+        if entity.type is EntityType.SUBNET and entity.attrs.get("prefix"):
+            try:
+                net = ipaddress.ip_network(entity.attrs["prefix"])
+            except ValueError:
+                continue
+            if addr in net and (best is None or net.prefixlen > best[0]):
+                best = (net.prefixlen, eid)
+    return best[1] if best else None
+
+
+def _composed(project: Project) -> tuple[dict[str, Entity], dict[str, Link]]:
+    entities = rendered_entities(project)
+    return entities, rendered_links(project, entities)
+
+
+def _entity_payload(project: Project, entities: dict[str, Entity], eid: str) -> dict[str, Any]:
+    entity = entities[eid]
+    if entity.attrs.get("origin") == "user":
+        return {**entity.to_dict(), "provenance": ["user"]}
+    return entity_payload(project.graph, eid)
+
+
+def _delete(project: Project, eid: str, entities: dict[str, Entity]) -> list[str]:
+    """Tombstone an entity and every link touching it. Returns the ids removed."""
+    removed = [eid]
+    if eid not in project.deleted:
+        project.deleted.append(eid)
+    links = rendered_links(project, entities)
+    for lid, link in links.items():
+        if (link.a == eid or link.b == eid) and lid not in project.deleted:
+            project.deleted.append(lid)
+            removed.append(lid)
+    return removed
 
 
 def project_payload(state: AppState) -> dict[str, Any]:
     project = state.project
-    graph = project.graph
-    entities = {eid: entity_payload(graph, eid) for eid in graph.entities}
+    entities, links = _composed(project)
     return {
         "seq": state.seq,
         "live": state.live,
@@ -282,11 +491,12 @@ def project_payload(state: AppState) -> dict[str, Any]:
         "name": state.path.name if state.path else "untitled",
         "dirty": state.dirty,
         "can_save": state.path is not None,
-        "entities": entities,
-        "links": {lid: link.to_dict() for lid, link in graph.links.items()},
+        "entities": {eid: _entity_payload(project, entities, eid) for eid in entities},
+        "links": {lid: link.to_dict() for lid, link in links.items()},
         "annotations": project.annotations,
         "aliases": project.aliases,
         "view": project.view,
+        "deleted": list(project.deleted),
         "runs": [
             {k: run.get(k) for k in ("id", "mode", "source", "started", "ended", "stop_reason")}
             for run in project.runs

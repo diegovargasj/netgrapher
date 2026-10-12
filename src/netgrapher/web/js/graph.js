@@ -87,13 +87,14 @@ export function gridSubnetChildren(cy, state, parent) {
     a.id() < b.id() ? -1 : a.id() > b.id() ? 1 : 0);
   if (movable.length === 0) return;
   const cols = Math.min(GRID_COLS, movable.length);
-  // Anchor at the children's current top-left so the grid grows down and right as hosts arrive,
-  // instead of expanding in all directions over neighbouring nodes.
-  const positions = leaves.map((n) => n.position());
-  const x0 = Math.min(...positions.map((p) => p.x));
-  const y0 = Math.min(...positions.map((p) => p.y));
+  // Anchor the grid on the lowest-id child: it stays at cell 0, so hosts already placed by an
+  // earlier grid keep their positions and only newly appended (higher-id) hosts take new cells.
+  const anchor = { ...movable[0].position() };
   movable.forEach((n, i) => {
-    n.position({ x: x0 + (i % cols) * GRID_STEP_X, y: y0 + Math.floor(i / cols) * GRID_STEP_Y });
+    n.position({
+      x: anchor.x + (i % cols) * GRID_STEP_X,
+      y: anchor.y + Math.floor(i / cols) * GRID_STEP_Y,
+    });
   });
 }
 

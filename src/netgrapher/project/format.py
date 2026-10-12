@@ -25,6 +25,11 @@ class Project:
     flows: list[dict[str, Any]] = field(default_factory=list)
     annotations: dict[str, dict[str, Any]] = field(default_factory=dict)
     view: dict[str, Any] = field(default_factory=dict)
+    # User overlay (written only by the UI, like annotations): manually added entities/links and
+    # ids the user removed. Rendered graph = (discovered + user) minus deleted. See compose.py.
+    user_entities: dict[str, dict[str, Any]] = field(default_factory=dict)
+    user_links: dict[str, dict[str, Any]] = field(default_factory=dict)
+    deleted: list[str] = field(default_factory=list)
     created: str = field(default_factory=utc_now)
     modified: str = field(default_factory=utc_now)
     tool_version: str = __version__
@@ -44,6 +49,9 @@ class Project:
             "flows": self.flows,
             "annotations": self.annotations,
             "view": self.view,
+            "user_entities": self.user_entities,
+            "user_links": self.user_links,
+            "deleted": self.deleted,
         }
 
     @classmethod
@@ -60,6 +68,9 @@ class Project:
             flows=doc.get("flows", []),
             annotations=doc.get("annotations", {}),
             view=doc.get("view", {}),
+            user_entities=doc.get("user_entities", {}),
+            user_links=doc.get("user_links", {}),
+            deleted=list(doc.get("deleted", [])),
             created=doc.get("created", utc_now()),
             modified=doc.get("modified", utc_now()),
             tool_version=doc.get("tool_version", "unknown"),
