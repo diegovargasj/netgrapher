@@ -128,3 +128,52 @@ def test_live_updates(live: tuple[str, Any], tmp_path: Path) -> None:
         browser.close()
     assert load(out).annotations["rtr:192.168.1.1"]["label"] == "Core GW"
     assert errors == [], errors
+
+
+def test_subnet_hosts_are_gridded_not_a_strip(live: tuple[str, Any]) -> None:
+    """Regression: hosts in a subnet must lay out as a grid, not a single sideways row."""
+    from netgrapher.graph.model import Entity, EntityType, Graph, Link, LinkType
+
+    url, session = live
+
+    def lan_graph(n: int) -> Graph:
+        subnet_id = "net:192.168.1.0/24"
+        entities = {
+            subnet_id: Entity(
+                subnet_id, EntityType.SUBNET, 1.0, {"prefix": "192.168.1.0/24", "kind": "local"}, []
+            ),
+        }
+        links = {}
+        for i in range(10, 10 + n):
+            hid = f"host:192.168.1.{i}"
+            entities[hid] = Entity(
+                hid, EntityType.HOST, 1.0, {"ip": f"192.168.1.{i}", "subnet_id": subnet_id}, []
+            )
+            links[f"lnk:member:{hid}|{subnet_id}"] = Link(
+                f"lnk:member:{hid}|{subnet_id}", LinkType.MEMBER, hid, subnet_id, 1.0
+            )
+        return Graph(entities, links, {})
+
+    with playwright_api.sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=CHROMIUM, headless=True)
+        page = browser.new_context(
+            viewport={"width": 1400, "height": 850}, bypass_csp=True
+        ).new_page()
+        page.goto(f"{url}/#token={TOKEN}")
+        page.wait_for_function("window.netgrapher && window.netgrapher.cy().nodes().length === 0")
+        session.publish_graph(lan_graph(3))
+        page.wait_for_function("window.netgrapher.cy().nodes(':childless').length === 3")
+        session.publish_graph(lan_graph(15))  # grow -> new hosts must grid, not strip
+        page.wait_for_function("window.netgrapher.cy().nodes(':childless').length === 15")
+
+        positions = page.evaluate(
+            "() => window.netgrapher.cy().nodes('[type = \"host\"]')"
+            ".map(n => ({x: Math.round(n.position('x')), y: Math.round(n.position('y'))}))"
+        )
+        rows = {p["y"] for p in positions}
+        cols = {p["x"] for p in positions}
+        assert len(rows) >= 2, f"hosts are in a single row (a strip): {positions}"
+        assert len(cols) <= 6, f"more columns than the grid width: {sorted(cols)}"
+        # Rows should be evenly spaced (a real grid), not scattered.
+        assert len(positions) == 15
+        browser.close()

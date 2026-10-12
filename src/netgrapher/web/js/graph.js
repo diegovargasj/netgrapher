@@ -74,37 +74,75 @@ export function buildElements(state, positions = {}) {
  * Give new nodes a position next to what they relate to, without moving existing nodes:
  * hosts beside their siblings, other nodes beside their neighbours, the rest to the right.
  */
-export function placeNewNodes(cy, newIds) {
+const GRID_COLS = 6; // hosts per row inside a subnet container
+const GRID_STEP_X = 92; // wide enough that IP labels below each host do not overlap
+const GRID_STEP_Y = 44;
+
+const isPinned = (state, id) => Boolean(state.annotations[id]?.pinned);
+
+/** Lay a subnet's (unpinned) host children out as a centred grid, so they never form a strip. */
+export function gridSubnetChildren(cy, state, parent) {
+  const leaves = parent.children().filter((c) => !c.isParent());
+  const movable = leaves.filter((c) => !isPinned(state, c.id())).sort((a, b) =>
+    a.id() < b.id() ? -1 : a.id() > b.id() ? 1 : 0);
+  if (movable.length === 0) return;
+  const cols = Math.min(GRID_COLS, movable.length);
+  // Anchor at the children's current top-left so the grid grows down and right as hosts arrive,
+  // instead of expanding in all directions over neighbouring nodes.
+  const positions = leaves.map((n) => n.position());
+  const x0 = Math.min(...positions.map((p) => p.x));
+  const y0 = Math.min(...positions.map((p) => p.y));
+  movable.forEach((n, i) => {
+    n.position({ x: x0 + (i % cols) * GRID_STEP_X, y: y0 + Math.floor(i / cols) * GRID_STEP_Y });
+  });
+}
+
+export function gridAllSubnets(cy, state) {
+  cy.nodes('node[type = "subnet"]').forEach((subnet) => gridSubnetChildren(cy, state, subnet));
+}
+
+/** Place freshly added nodes without moving the rest; subnets with new hosts are re-gridded. */
+export function placeNewNodes(cy, state, newIds) {
   const pending = new Set(newIds);
   const isPlaced = (n) => !pending.has(n.id());
   const jitter = () => (Math.random() - 0.5) * 30;
-  const leavesFirst = cy.collection(newIds.map((id) => cy.getElementById(id)).filter((n) => n.nonempty()))
-    .sort((a, b) => Number(a.isParent()) - Number(b.isParent()));
+  const fresh = cy.collection(newIds.map((id) => cy.getElementById(id)).filter((n) => n.nonempty()));
+
+  // Non-subnet leaves with no parent (routers, external, unknown): anchor near a placed neighbour.
   let fallbackRow = 0;
-  leavesFirst.forEach((n) => {
-    if (n.isParent()) {
-      pending.delete(n.id()); // a compound's position follows its children
-      return;
-    }
+  fresh.filter((n) => !n.isParent() && n.parent().empty()).forEach((n) => {
+    const around = n.neighborhood("node").filter(isPlaced);
     let anchor = null;
-    const siblings = n.parent().nonempty() ? n.siblings().filter(isPlaced) : cy.collection();
-    if (siblings.nonempty()) {
-      const bb = siblings.boundingBox();
-      anchor = { x: bb.x2 + 25, y: (bb.y1 + bb.y2) / 2 };
+    if (around.nonempty()) {
+      const bb = around.boundingBox();
+      anchor = { x: (bb.x1 + bb.x2) / 2 + 90, y: (bb.y1 + bb.y2) / 2 + 40 };
     } else {
-      const around = (n.parent().nonempty() ? n.parent() : n).neighborhood("node").filter(isPlaced);
-      if (around.nonempty()) {
-        const bb = around.boundingBox();
-        anchor = { x: (bb.x1 + bb.x2) / 2 + 90, y: (bb.y1 + bb.y2) / 2 + 40 };
-      }
-    }
-    if (!anchor) {
-      const placed = cy.nodes().filter((m) => isPlaced(m) && !m.isParent());
+      const placed = cy.nodes().filter((m) => isPlaced(m) && !m.isParent() && m.parent().empty());
       const bb = placed.nonempty() ? placed.boundingBox() : { x2: 0, y1: 0 };
-      anchor = { x: bb.x2 + 100, y: bb.y1 + 60 * fallbackRow++ };
+      anchor = { x: bb.x2 + 120, y: bb.y1 + 70 * fallbackRow++ };
     }
     n.position({ x: anchor.x + jitter(), y: anchor.y + jitter() });
     pending.delete(n.id());
+  });
+
+  // Each subnet that gained a host (or is itself new): re-grid its children as a block.
+  const touched = new Set();
+  fresh.forEach((n) => {
+    const parent = n.isParent() ? n : n.parent();
+    if (parent.nonempty() && parent.data("type") === "subnet") touched.add(parent.id());
+  });
+  touched.forEach((id) => {
+    const subnet = cy.getElementById(id);
+    // A brand-new subnet with children needs a starting anchor before its grid is centred.
+    const unplacedParent = pending.has(id);
+    if (unplacedParent) {
+      const around = subnet.neighborhood("node").filter(isPlaced);
+      const seed = around.nonempty()
+        ? (() => { const b = around.boundingBox(); return { x: (b.x1 + b.x2) / 2, y: b.y2 + 120 }; })()
+        : { x: 0, y: 0 };
+      subnet.children(":childless").forEach((c, i) => c.position({ x: seed.x + i, y: seed.y }));
+    }
+    gridSubnetChildren(cy, state, subnet);
   });
 }
 
@@ -288,5 +326,7 @@ export function runLayout(cy, state, { relayout = false } = {}) {
       idealEdgeLength: 70, fixedNodeConstraint: fixed.length ? fixed : undefined,
     }).run();
   }
+  // The general-purpose layout clusters subnet children; lay them out as a tidy grid instead.
+  gridAllSubnets(cy, state);
   cy.fit(cy.elements(":visible"), 30);
 }

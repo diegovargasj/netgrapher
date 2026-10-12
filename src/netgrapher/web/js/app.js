@@ -131,7 +131,7 @@ function render({ relayout = false, positions = null } = {}) {
   if (positions) {
     // Resync during a live run: keep what is on screen, place only what is new.
     const unplaced = cy.nodes().filter((n) => !n.isParent() && !positions[n.id()] && !state.annotations[n.id()]?.position);
-    placeNewNodes(cy, unplaced.map((n) => n.id()));
+    placeNewNodes(cy, state, unplaced.map((n) => n.id()));
     cy.zoom(viewport.zoom);
     cy.pan(viewport.pan);
   } else {
@@ -284,7 +284,7 @@ function applyGraph(ev) {
   if (placedBefore === 0 && fresh.length) {
     runLayout(cy, state, { relayout: true }); // nothing on screen to keep stable yet
   } else {
-    placeNewNodes(cy, fresh);
+    placeNewNodes(cy, state, fresh);
   }
   const freshNodes = cy.collection(fresh.map((id) => cy.getElementById(id)));
   freshNodes.addClass("fresh");
