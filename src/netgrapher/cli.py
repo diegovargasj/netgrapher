@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -22,7 +22,7 @@ from netgrapher.config import (
     ScopeConfig,
     parse_duration,
 )
-from netgrapher.discover import LiveOptions, Status, run_file, run_live
+from netgrapher.discover import LiveOptions, ProbeController, Status, run_file, run_live
 from netgrapher.export import ExportFormat, export_project
 from netgrapher.graph.model import Graph
 from netgrapher.project.format import Project
@@ -149,14 +149,12 @@ def discover(
         typer.echo(str(exc), err=True)
         raise typer.Exit(EXIT_USAGE) from exc
 
-    not_yet = [
-        (mode is not Mode.PASSIVE, f"--mode {mode}", "0.5"),
-        (asn_db is not None, "--asn-db", "a later milestone"),
-    ]
-    for active, what, milestone in not_yet:
-        if active:
-            typer.echo(f"{what} is not implemented yet (milestone {milestone})", err=True)
-            raise typer.Exit(EXIT_RUNTIME)
+    if asn_db is not None:
+        typer.echo("--asn-db is not implemented yet (a later milestone)", err=True)
+        raise typer.Exit(EXIT_RUNTIME)
+    if read is not None and mode is not Mode.PASSIVE:
+        typer.echo("--read is passive only; active/reactive probing needs live capture", err=True)
+        raise typer.Exit(EXIT_USAGE)
     if read is not None and (duration or packets or until_converged or write or interface):
         typer.echo("--duration/--packets/--until-converged/-w/-i apply to live capture", err=True)
         raise typer.Exit(EXIT_USAGE)
@@ -169,6 +167,16 @@ def discover(
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(EXIT_USAGE) from exc
+
+    if mode is Mode.ACTIVE and config.dry_run:
+        _print_active_dry_run(config)
+        return
+    if mode is not Mode.PASSIVE:
+        typer.echo(
+            "WARNING: active/reactive modes send probe packets. Only scan networks you own or "
+            "are authorized to test.",
+            err=True,
+        )
 
     output = output or Path(f"netgrapher-{datetime.now():%Y%m%d-%H%M%S}.ngraph")
     status = _StatusPrinter()
@@ -187,7 +195,9 @@ def discover(
             ui_command(output, port=port, no_browser=no_browser)
         return
     if not ui:
-        project = _discover_live(config, options, write, flows, status)
+        project = _discover_live(config, options, write, flows, status, output=output)
+        if config.dry_run and config.mode is not Mode.PASSIVE:
+            return
         status.done()
         save(project, output)
         typer.echo(build_report(project))
@@ -233,6 +243,7 @@ def _discover_live_with_ui(
             on_status,
             on_graph=session.publish_graph,
             message=status.message,
+            output=output,
         )
         status.done()
         session.finish(project, output)
@@ -254,10 +265,22 @@ def _discover_live(
     *,
     on_graph: Callable[[Graph], None] | None = None,
     message: Callable[[str], None] | None = None,
+    output: Path | None = None,
 ) -> Project:
+    from netgrapher.discovery.audit import AuditLog
+    from netgrapher.discovery.controller import (
+        DryController,
+        build_scope,
+        make_prober_factory,
+        scope_desc,
+    )
+
     interfaces = list(config.capture.interfaces)
+    # Reading host config is only needed to pick a default interface or to scope probing.
+    host = read_host_config() if not interfaces or config.mode is not Mode.PASSIVE else None
     if not interfaces:
-        default = read_host_config().default_interface()
+        assert host is not None
+        default = host.default_interface()
         if default is None:
             typer.echo("no default route; choose an interface with -i", err=True)
             raise typer.Exit(EXIT_USAGE)
@@ -278,15 +301,42 @@ def _discover_live(
         else "",
     ]
     limit_text = ", ".join(x for x in limits if x) or "until Ctrl-C"
-    typer.echo(f"Capturing passively on {', '.join(interfaces)} {limit_text}.", err=True)
+
+    make_prober: Callable[..., ProbeController] | None = None
+    audit: AuditLog | None = None
+    scope = None
+    verb = "Capturing passively"
+    if config.mode is not Mode.PASSIVE:
+        assert host is not None
+        local_subnets = tuple(
+            f"{a.ip}/{a.prefixlen}"
+            for iface in host.interfaces
+            if not iface.loopback
+            for a in iface.addresses
+            if ":" not in a.ip
+        )
+        scope = build_scope(config, local_subnets)
+        verb = f"{config.mode.capitalize()} discovery"
+        if config.dry_run:
+            dry = DryController(config, scope)
+            make_prober = lambda emit: dry  # noqa: E731
+        else:
+            audit_path = output.with_suffix(".audit.jsonl") if output else None
+            audit = AuditLog(audit_path, "r1").__enter__()
+            make_prober = make_prober_factory(config, scope, audit)
+    typer.echo(f"{verb} on {', '.join(interfaces)} {limit_text}.", err=True)
     try:
-        return run_live(
+        project = run_live(
             source,
             options,
             record_flows=flows,
             on_status=status,
             on_message=message or getattr(status, "message", None),
             on_graph=on_graph,
+            make_prober=make_prober,
+            mode=config.mode,
+            cidrs=config.cidrs,
+            scope_desc=scope_desc(config, scope) if scope is not None else None,
         )
     except LiveCaptureError as exc:
         if isinstance(status, _StatusPrinter):
@@ -294,6 +344,36 @@ def _discover_live(
         typer.echo(str(exc), err=True)
         typer.echo("Run `netgrapher doctor` to check your setup.", err=True)
         raise typer.Exit(EXIT_ENVIRONMENT) from exc
+    finally:
+        if audit is not None:
+            audit.close()
+    if config.mode is not Mode.PASSIVE and config.dry_run:
+        _print_targets(dry.targets, getattr(dry.planner, "warnings", []))
+    return project
+
+
+def _print_active_dry_run(config: DiscoveryConfig) -> None:
+    from netgrapher.discovery.controller import build_scope, plan_active_dry_run
+
+    scope = build_scope(config, ())
+    _print_targets(plan_active_dry_run(config, scope), [])
+
+
+def _print_targets(targets: Sequence[object], warnings: list[str]) -> None:
+    from collections import Counter
+
+    from netgrapher.discovery.target import Target
+
+    typed = [t for t in targets if isinstance(t, Target)]
+    typer.echo(f"\nDry run: {len(typed)} probe(s) planned (nothing sent).")
+    for kind, n in sorted(Counter(str(t.kind) for t in typed).items()):
+        typer.echo(f"  {kind}: {n}")
+    for t in typed[:50]:
+        typer.echo(f"    {t.kind} -> {t.dst}  ({t.reason})")
+    if len(typed) > 50:
+        typer.echo(f"    … and {len(typed) - 50} more")
+    for w in warnings:
+        typer.echo(f"  warning: {w}")
 
 
 class _StatusPrinter:

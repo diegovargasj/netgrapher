@@ -27,10 +27,12 @@ WEIGHTS: dict[str, float] = {
     "R-HOP-TTL": 0.60,
     "R-PATH-GW": 0.80,
     "R-PATH-TRACE": 0.90,
+    "R-PATH-TRACE-CHAIN": 0.85,
     "R-PATH-ROUTE": 1.00,
     # Hosts and external
     "R-HOST-SELF": 1.00,
     "R-HOST-OBS": 1.00,
+    "R-HOST-PROBE": 1.00,
     "R-HOST-REF": 0.50,
     "R-EXT": 1.00,
 }

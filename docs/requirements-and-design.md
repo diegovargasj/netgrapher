@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v0.5 (milestones 0.1–0.4 implemented) |
+| **Status** | Draft v0.6 (milestones 0.1–0.5 implemented) |
 | **Date** | 2026-10-11 |
 | **Author** | diegovargasj |
 
@@ -438,7 +438,8 @@ Because the plan is fixed, its size is known in advance. This gives an exact `--
 
 - **Generation:** targets derived from passive observations are generation 1. Targets derived from entities first seen in probe replies are generation *n+1*. Targets above `--max-generation` (default 2) are dropped and counted.
 - **Budget:** when `--budget` probes have been sent, the planner stops and the run continues passively.
-- **Priority:** traceroutes to new remote networks, then alias probes, then sweeps, then PTR lookups.
+- **Priority:** traceroutes to new networks, then liveness (sweeps), then PTR lookups.
+- **Scope semantics (0.5):** an address is in scope if it is in the allow list and not denied; `--allow-public` additionally permits *any* public address (reactive only). Active mode's allow list is exactly the user's CIDRs, so it never probes outside them even when a CIDR is public.
 
 ### 8.4 Probe techniques
 
@@ -453,6 +454,8 @@ Because the plan is fixed, its size is known in advance. This gives an exact `--
 | PTR lookup | Names | System resolver (probe modes only) | — |
 
 Defaults: traceroute max TTL 30, one probe per hop, stop after 3 consecutive silent hops past the last reply. ICMP timeout 2 s. Global rate limit 50 pps, per destination 5 pps, at most 256 probes in flight.
+
+**As implemented in 0.5.** v1 probes read their replies on the probe's own socket (the ping socket's echo reply, TCP connect's result, and ICMP errors via `IP_RECVERR` for traceroute) rather than correlating them out of the capture stream; this matches the unprivileged mechanisms and is simpler and more reliable. Each probe emits facts directly with `probe` provenance (`PROBE_ALIVE`, `TRACE_HOP`), which the inference engine turns into hosts, routers and paths through new rules **R-HOST-PROBE** (probe-confirmed host), **R-RTR-TRACE** (a traceroute hop is a router), **R-PATH-TRACE** (last hop → the target's network) and **R-PATH-TRACE-CHAIN** (adjacent hops). Mercator alias probing and IP-ID aliasing are deferred to v2; PTR lookups are implemented. The prober runs in its own thread with an asyncio loop; it feeds facts back to the single-writer fact store through the run loop's queue, and the planner receives new entities from each inference tick. The audit log is written to `<output>.audit.jsonl`. Convergence (`--until-converged`) also waits for the probe queue to drain.
 
 ### 8.5 Audit log
 
@@ -792,7 +795,8 @@ Sample pcap sources: the Wireshark SampleCaptures wiki, plus captures generated 
 | **0.4** ✔ | Live attach (`discover --ui`), WebSocket diffs, stable live layout, aliases. |
 | **0.5** | Active and reactive modes with unprivileged probes, scope, rate limits, budget, generation limit, `--dry-run`, audit log. OSPF/RIP/VRRP/HSRP extractors. |
 | **1.0** | Hardening, lab precision/recall baseline, tuned rule weights, documentation, packaging. |
-| **2.x** | IPv6 inference, privileged helper (ARP, SYN, Paris traceroute, IP-ID alias), resume/merge into projects, UI-controlled discovery, pywebview, macOS. |
+| **0.5** ✔ | Active and reactive modes: unprivileged probes (ICMP echo, TCP connect, UDP traceroute, PTR), scope, rate limits, budget, generation limit, `--dry-run`, audit log. |
+| **2.x** | IPv6 inference, privileged helper (ARP, SYN, Paris traceroute, IP-ID alias/Mercator), resume/merge into projects, UI-controlled discovery, pywebview, macOS. |
 | **Later** | Long-running monitor mode, Windows, NAT detection, SQLite project backend. |
 
 ---

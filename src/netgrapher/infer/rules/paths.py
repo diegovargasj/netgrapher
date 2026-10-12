@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from collections import defaultdict
 
 from netgrapher.facts.model import Fact, FactKind
@@ -10,6 +11,7 @@ from netgrapher.graph.model import Link, LinkType
 from netgrapher.infer.confidence import noisy_or
 from netgrapher.infer.context import Context
 from netgrapher.infer.rules.hosts import EXTERNAL_ID
+from netgrapher.net import is_external
 
 
 def _gateways(ctx: Context, ips: list[str]) -> dict[str, list[Fact]]:
@@ -48,8 +50,62 @@ def _route_paths(ctx: Context) -> None:
         )
 
 
+def _trace_paths(ctx: Context) -> None:
+    """Chain the router hops of each traceroute, and link the last hop to the target (R-PATH-TRACE).
+
+    Consecutive hops are adjacent on the path; the model has no name for the transit subnet
+    between them, so the adjacency is drawn as an inferred-path link between the two routers.
+    """
+    for target, hops in sorted(ctx.traces.items()):
+        chain = [rid for f in hops if (rid := ctx.router_of_ip.get(f.subject)) is not None]
+        for a, b in itertools.pairwise(chain):
+            if a == b:
+                continue
+            facts = [f for f in hops if ctx.router_of_ip.get(f.subject) in (a, b)]
+            ev = ctx.evidence(
+                "R-PATH-TRACE-CHAIN", f"{a}|{b}", facts, f"Adjacent traceroute hops to {target}"
+            )
+            ctx.add_or_merge_link(
+                Link(
+                    link_id(LinkType.INFERRED_PATH, a, b),
+                    LinkType.INFERRED_PATH,
+                    a,
+                    b,
+                    noisy_or(ctx.weight_of([ev])),
+                    {"hops": 1, "basis": ["traceroute"]},
+                    [ev],
+                )
+            )
+        if not chain:
+            continue
+        last = chain[-1]
+        dest = ctx.subnet_of.get(target)
+        if dest is None and is_external(target):
+            dest = EXTERNAL_ID if EXTERNAL_ID in ctx.graph.entities else None
+        if dest is None or dest == last:
+            continue
+        facts = [f for f in hops if ctx.router_of_ip.get(f.subject) == last]
+        ev = ctx.evidence(
+            "R-PATH-TRACE", f"{last}>{dest}", facts, f"Last traceroute hop before {target}"
+        )
+        link_type = LinkType.UPLINK if dest == EXTERNAL_ID else LinkType.INFERRED_PATH
+        attrs = {} if dest == EXTERNAL_ID else {"hops": None, "basis": ["traceroute"]}
+        ctx.add_or_merge_link(
+            Link(
+                link_id(link_type, last, dest),
+                link_type,
+                last,
+                dest,
+                noisy_or(ctx.weight_of([ev])),
+                attrs,
+                [ev],
+            )
+        )
+
+
 def build(ctx: Context) -> None:
     _route_paths(ctx)
+    _trace_paths(ctx)
     members: defaultdict[str, list[str]] = defaultdict(list)
     for ip, sid in ctx.subnet_of.items():
         members[sid].append(ip)

@@ -12,15 +12,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import FrameType
-from typing import Any
+from typing import Any, Protocol
 
 from netgrapher.capture.hostinfo import HostConfig, add_host_facts, read_host_config
 from netgrapher.capture.live import LiveSource
 from netgrapher.capture.source import CaptureStats, FileSource, RawPacket
 from netgrapher.config import Mode
+from netgrapher.facts.model import Observation, Provenance
 from netgrapher.facts.store import FactStore
 from netgrapher.flows import FlowTable
-from netgrapher.graph.model import Graph
+from netgrapher.graph.model import EntityType, Graph
 from netgrapher.infer.engine import infer
 from netgrapher.pipeline import Ingestor, IngestStats
 from netgrapher.project.format import Project, utc_now
@@ -49,7 +50,9 @@ def _iso(ts: float | None) -> str | None:
     return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
-def _stats_dict(stats: IngestStats, capture: CaptureStats) -> dict[str, Any]:
+def _stats_dict(
+    stats: IngestStats, capture: CaptureStats, prober: ProbeController | None = None
+) -> dict[str, Any]:
     return {
         "packets": stats.packets,
         "ipv4": stats.ipv4,
@@ -64,6 +67,7 @@ def _stats_dict(stats: IngestStats, capture: CaptureStats) -> dict[str, Any]:
         "if_received": {str(k): v for k, v in capture.if_received.items()},
         "if_dropped": {str(k): v for k, v in capture.if_dropped.items()},
         "os_dropped": {str(k): v for k, v in capture.os_dropped.items()},
+        "probes_sent": prober.sent if prober is not None else 0,
     }
 
 
@@ -158,6 +162,38 @@ class _StopRequests:
 _END = object()
 
 
+@dataclass
+class FactBatch:
+    observations: list[Observation]
+    kind: str  # probe kind, for statistics
+
+
+class ProbeController(Protocol):
+    sent: int
+    error: BaseException | None
+
+    def start(self) -> None: ...
+    def feed_entities(self, entities: list[tuple[str, str]]) -> None: ...
+    def is_idle(self) -> bool: ...
+    def request_stop(self) -> None: ...
+    def join(self, timeout: float | None = None) -> None: ...
+
+
+def planner_entities(graph: Graph) -> list[tuple[str, str]]:
+    """(entity_type, address-or-prefix) for the reactive planner; routers: one per interface."""
+    out: list[tuple[str, str]] = []
+    for entity in graph.entities.values():
+        if entity.type is EntityType.SUBNET:
+            out.append(("subnet", entity.attrs["prefix"]))
+        elif entity.type is EntityType.HOST and not entity.attrs.get("is_self"):
+            out.append(("host", entity.attrs["ip"]))
+        elif entity.type is EntityType.ROUTER:
+            for iface in entity.attrs.get("interfaces", []):
+                if iface.get("ip"):
+                    out.append(("router", iface["ip"]))
+    return out
+
+
 def run_live(
     source: LiveSource,
     options: LiveOptions,
@@ -168,8 +204,13 @@ def run_live(
     on_status: StatusCallback | None = None,
     on_message: MessageCallback | None = None,
     on_graph: Callable[[Graph], None] | None = None,
+    make_prober: Callable[[Callable[[list[Observation], str], None]], ProbeController]
+    | None = None,
+    mode: Mode = Mode.PASSIVE,
+    cidrs: tuple[str, ...] = (),
+    scope_desc: dict[str, object] | None = None,
 ) -> Project:
-    """Passive live capture. Probing modes arrive in milestone 0.5.
+    """Live capture. In active/reactive mode a prober (from make_prober) runs alongside.
 
     on_graph receives every intermediate inference result (every tick_s), e.g. for the live UI.
     """
@@ -186,6 +227,17 @@ def run_live(
     packets: queue.Queue[object] = queue.Queue(maxsize=100_000)
     errors: list[BaseException] = []
 
+    def emit_facts(observations: list[Observation], kind: str) -> None:
+        packets.put(FactBatch(observations, kind))
+
+    def absorb(batch: FactBatch) -> None:
+        for obs in batch.observations:
+            store.add(obs, ts=time.time(), frame=None, run_id=run_id, provenance=Provenance.PROBE)
+        ingestor.stats.protocols[f"probe:{batch.kind}"] += 1
+
+    prober = make_prober(emit_facts) if make_prober else None
+    probe_fed: set[tuple[str, str]] = set()
+
     def read_packets() -> None:
         try:
             for raw in source:
@@ -199,6 +251,8 @@ def run_live(
     started_wall = utc_now()
     start = time.monotonic()
     reader.start()
+    if prober is not None:
+        prober.start()
 
     stops = _StopRequests(on_message)
     stop_reason: str | None = None
@@ -223,8 +277,16 @@ def run_live(
                 options.packets and ingestor.stats.packets >= options.packets
             ):
                 ingestor.add(item)
+            elif isinstance(item, FactBatch):
+                absorb(item)
 
             now = time.monotonic()
+            if prober is not None and prober.error is not None and stop_reason is None:
+                stop_reason = "probe-error"
+                if on_message:
+                    on_message(f"probing stopped: {prober.error}")
+                source.stop()
+                drain_deadline = now + options.drain_timeout_s
             if stop_reason is None:
                 if stops.requested:
                     stop_reason = "interrupted"
@@ -232,7 +294,11 @@ def run_live(
                     stop_reason = "duration"
                 elif options.packets and ingestor.stats.packets >= options.packets:
                     stop_reason = "packet-count"
-                elif options.until_converged_s and now - last_new >= options.until_converged_s:
+                elif (
+                    options.until_converged_s
+                    and now - last_new >= options.until_converged_s
+                    and (prober is None or prober.is_idle())
+                ):
                     stop_reason = "converged"
                 if stop_reason is not None:
                     source.stop()
@@ -245,6 +311,11 @@ def run_live(
                 graph = infer(store)
                 if on_graph:
                     on_graph(graph)
+                if prober is not None:
+                    fresh = [e for e in planner_entities(graph) if e not in probe_fed]
+                    if fresh:
+                        probe_fed.update(fresh)
+                        prober.feed_entities(fresh)
                 current = set(graph.entities)
                 if current - known:
                     last_new = now
@@ -257,6 +328,16 @@ def run_live(
                     )
                 next_tick = now + options.tick_s
 
+    if prober is not None:
+        prober.request_stop()
+        prober.join(timeout=options.drain_timeout_s)
+        while True:  # absorb facts emitted just before the prober stopped
+            try:
+                item = packets.get_nowait()
+            except queue.Empty:
+                break
+            if isinstance(item, FactBatch):
+                absorb(item)
     reader.join(timeout=options.drain_timeout_s)
     if errors and stop_reason is None:
         raise errors[0]
@@ -267,7 +348,7 @@ def run_live(
     stats = ingestor.stats
     run = {
         "id": run_id,
-        "mode": str(Mode.PASSIVE),
+        "mode": str(mode),
         "source": "live",
         "input": None,
         "interfaces": [
@@ -277,13 +358,13 @@ def run_live(
         or [
             {"name": n, "linktype": None, "snaplen": source.snaplen} for n in source.interface_names
         ],
-        "cidrs": [],
-        "scope": None,
+        "cidrs": list(cidrs),
+        "scope": scope_desc,
         "started": started_wall,
         "ended": utc_now(),
         "analyzed": utc_now(),
         "stop_reason": stop_reason,
-        "stats": _stats_dict(stats, source.stats),
+        "stats": _stats_dict(stats, source.stats, prober),
         "hostcfg": {"start": hostcfg_start.to_dict(), "end": hostcfg_end.to_dict()},
         "capture_file": str(source.write_path) if source.write_path else None,
         "facts": len(store),

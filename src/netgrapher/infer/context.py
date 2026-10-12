@@ -45,6 +45,9 @@ class Context:
     ips_by_mac: dict[str, set[str]] = field(default_factory=dict)
     vlans_by_mac: dict[str, set[Vlan]] = field(default_factory=dict)
     ttls: dict[str, list[Fact]] = field(default_factory=dict)
+    traces: dict[str, list[Fact]] = field(default_factory=dict)
+    trace_hops: set[str] = field(default_factory=set)
+    alive: set[str] = field(default_factory=set)
     all_ips: set[str] = field(default_factory=set)
 
     # Stage results
@@ -94,6 +97,13 @@ class Context:
             ttls[f.subject].append(f)
         self.ttls = dict(ttls)
 
+        traces: defaultdict[str, list[Fact]] = defaultdict(list)  # target -> hop facts
+        for f in self.store.by_kind(FactKind.TRACE_HOP):
+            traces[f.get("target")].append(f)
+        self.traces = {t: sorted(hs, key=lambda f: f.get("ttl")) for t, hs in traces.items()}
+        self.trace_hops = {f.subject for f in self.store.by_kind(FactKind.TRACE_HOP)}
+        self.alive = {f.subject for f in self.store.by_kind(FactKind.PROBE_ALIVE)}
+
         self_ips: defaultdict[str, list[Fact]] = defaultdict(list)
         for f in self.store.by_kind(FactKind.HOST_ADDRESS):
             self_ips[f.subject].append(f)
@@ -132,6 +142,11 @@ class Context:
         for f in self.store.by_kind(FactKind.ICMP_REDIRECT):
             yield f.subject
             yield f.get("gateway")
+        for f in self.store.by_kind(FactKind.TRACE_HOP):
+            yield f.subject
+            yield f.get("target")
+        for f in self.store.by_kind(FactKind.PROBE_ALIVE):
+            yield f.subject
         for f in self.store.by_kind(FactKind.REDUNDANCY_SPEAKER):
             yield f.subject
             yield from f.get("vips", ())

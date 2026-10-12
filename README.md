@@ -2,7 +2,7 @@
 
 **Builds a map of the routers, subnets and hosts on a network from the traffic it sees, and lets you explore and edit that map interactively.**
 
-> **Status: early development (milestone 0.4).** Passive discovery works today, both live (`discover`, via dumpcap) and from pcap/pcapng files (`discover --read`), with an interactive UI that can follow a capture as it runs (`discover --ui`), plus `info`, `export`, `doctor` and `ui`. The active/reactive modes are still *planned*. See [docs/requirements-and-design.md](docs/requirements-and-design.md) for the full specification.
+> **Status: early development (milestone 0.5).** All three discovery modes work: passive, plus active and reactive probing (unprivileged ICMP echo, TCP connect, UDP traceroute, PTR). Live and file capture, the interactive UI with live updates, `info`, `export`, `doctor` and `ui` are all available. IPv6 inference and the privileged probe helper are still *planned*. See [docs/requirements-and-design.md](docs/requirements-and-design.md) for the full specification.
 
 ---
 
@@ -98,7 +98,7 @@ netgrapher discover --duration 30m --ui -o office.ngraph
 netgrapher discover --read incident.pcapng -o incident.ngraph
 
 # Active: scan the authorized ranges (preview the plan first)
-netgrapher discover --mode active --cidr 10.10.0.0/22 --cidr 10.20.0.0/24 --dry-run
+netgrapher discover --mode active --cidr 10.10.0.0/22 --cidr 10.20.0.0/24 --dry-run   # preview, sends nothing
 netgrapher discover --mode active --cidr 10.10.0.0/22 --cidr 10.20.0.0/24 -o lab.ngraph
 
 # Reactive: probe only what shows up in traffic; stop when nothing new appears for 5 minutes

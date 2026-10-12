@@ -47,6 +47,9 @@ class FactKind(StrEnum):
     ROUTING_SPEAKER = "routing_speaker"  # data: proto, router_id (OSPF)
     REDUNDANCY_SPEAKER = "redundancy_speaker"  # data: proto, group, vips
     SUBNET_HINT = "subnet_hint"  # data: mask, source
+    # Probe results (provenance probe)
+    PROBE_ALIVE = "probe_alive"  # subject: host IP; data: method ("icmp" | "tcp"), port
+    TRACE_HOP = "trace_hop"  # subject: hop router IP; data: ttl, target, reached
 
 
 @dataclass(frozen=True, slots=True)

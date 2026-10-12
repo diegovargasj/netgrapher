@@ -143,3 +143,47 @@ def test_inference_is_deterministic() -> None:
     first, second = office(), office()
     assert list(first.entities) == list(second.entities)
     assert list(first.evidence) == list(second.evidence)
+
+
+def graph_from_observations(observations):  # type: ignore[no-untyped-def]
+    """Build a graph from probe observations (provenance probe)."""
+    from netgrapher.facts.model import Provenance
+    from netgrapher.facts.store import FactStore
+    from netgrapher.infer.engine import infer
+
+    store = FactStore()
+    for i, obs in enumerate(observations):
+        store.add(obs, ts=1_760_000_000.0 + i, frame=None, run_id="r1", provenance=Provenance.PROBE)
+    return infer(store)
+
+
+def test_trace_hops_become_routers_and_a_chain() -> None:
+    from netgrapher.facts.model import FactKind, observe
+
+    obs = [
+        observe(FactKind.TRACE_HOP, "10.0.0.1", ttl=1, target="10.20.0.5", reached=False),
+        observe(FactKind.TRACE_HOP, "10.0.1.1", ttl=2, target="10.20.0.5", reached=False),
+        observe(FactKind.PROBE_ALIVE, "10.20.0.5", method="icmp", port=None),
+    ]
+    g = graph_from_observations(obs)
+    assert g.entities["rtr:10.0.0.1"].type is EntityType.ROUTER
+    assert g.entities["rtr:10.0.1.1"].type is EntityType.ROUTER
+    assert any(g.evidence[e].rule == "R-RTR-TRACE" for e in g.entities["rtr:10.0.0.1"].evidence)
+    # Consecutive hops are chained.
+    assert "lnk:inferred-path:rtr:10.0.0.1|rtr:10.0.1.1" in g.links
+    chain = g.links["lnk:inferred-path:rtr:10.0.0.1|rtr:10.0.1.1"]
+    assert chain.attrs["basis"] == ["traceroute"]
+    # The alive target is a host.
+    assert g.entities["host:10.20.0.5"].type is EntityType.HOST
+
+
+def test_probe_alive_upgrades_a_reference_to_a_host() -> None:
+    from netgrapher.facts.model import FactKind, observe
+
+    g = graph_from_observations(
+        [observe(FactKind.PROBE_ALIVE, "192.168.5.20", method="tcp", port=443)]
+    )
+    host = g.entities["host:192.168.5.20"]
+    assert host.type is EntityType.HOST
+    assert any(g.evidence[e].rule == "R-HOST-PROBE" for e in host.evidence)
+    assert host.confidence == 1.0

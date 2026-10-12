@@ -27,3 +27,11 @@ def _no_real_capture_or_host_access(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     monkeypatch.setattr(hostinfo, "read_host_config", forbidden)
     monkeypatch.setattr(discover, "read_host_config", forbidden)
     monkeypatch.setattr(cli, "read_host_config", forbidden)
+
+    # Block the real socket-based probe transport so no test can send probes on the network.
+    from netgrapher.discovery import transport
+
+    def no_sockets(self: object) -> None:
+        raise AssertionError("test tried to create the real SocketTransport")
+
+    monkeypatch.setattr(transport.SocketTransport, "__init__", no_sockets)

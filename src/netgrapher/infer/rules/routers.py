@@ -20,6 +20,7 @@ _SUMMARIES = {
     "R-RTR-HOSTCFG": "Gateway in the capture host's routing table ({n} route(s))",
     "R-RTR-DHCP": "Announced as router (DHCP option 3) in {n} lease(s)",
     "R-RTR-ICMP": "Sent {n} kind(s) of router-only ICMP (time exceeded, unreachable, redirect)",
+    "R-RTR-TRACE": "Answered as a traceroute hop ({n} probe(s))",
     "R-RTR-PROTO": "Routing/redundancy protocol speaker ({n} observation(s))",
     "R-RTR-MAC": "Its MAC forwards traffic for many other addresses",
 }
@@ -66,6 +67,8 @@ def build(ctx: Context) -> None:
             claims[f.subject]["R-RTR-ICMP"].append(f)
             if kind is FactKind.ICMP_REDIRECT:
                 claims[f.get("gateway")]["R-RTR-ICMP"].append(f)
+    for f in ctx.store.by_kind(FactKind.TRACE_HOP):
+        claims[f.subject]["R-RTR-TRACE"].append(f)
     router_ids: defaultdict[str, set[str]] = defaultdict(set)
     protocols: defaultdict[str, set[str]] = defaultdict(set)
     for f in ctx.store.by_kind(FactKind.ROUTING_SPEAKER):

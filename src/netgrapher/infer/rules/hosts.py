@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from netgrapher.facts.model import FactKind
 from netgrapher.graph.ids import host_id, link_id
 from netgrapher.graph.model import Entity, EntityType, Link, LinkType
 from netgrapher.infer.confidence import noisy_or
@@ -19,6 +20,9 @@ def build(ctx: Context) -> None:
         seen = ctx.seen.get(ip, {})
         if ip in ctx.self_ips:
             ev = ctx.evidence("R-HOST-SELF", ip, ctx.self_ips[ip], "The capture host itself")
+        elif ip in ctx.alive:
+            facts = [f for f in ctx.store.by_kind(FactKind.PROBE_ALIVE) if f.subject == ip]
+            ev = ctx.evidence("R-HOST-PROBE", ip, facts, "Responded to an active probe")
         elif "src" in seen or ip in ctx.arp:
             facts = [seen["src"]] if "src" in seen else []
             for mac_facts in ctx.arp.get(ip, {}).values():

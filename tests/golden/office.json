@@ -687,6 +687,7 @@
         "malformed": 1,
         "os_dropped": {},
         "packets": 23,
+        "probes_sent": 0,
         "protocols": {
           "arp": 2,
           "dhcp": 2,
