@@ -12,4 +12,4 @@ def noisy_or(weights: Iterable[float]) -> float:
         if not 0.0 <= w <= 1.0:
             raise ValueError(f"weight out of range: {w}")
         disbelief *= 1.0 - w
-    return 1.0 - disbelief
+    return round(1.0 - disbelief, 6)  # avoid float noise such as 0.19999999999999996

@@ -2,7 +2,7 @@
 
 **Builds a map of the routers, subnets and hosts on a network from the traffic it sees, and lets you explore and edit that map interactively.**
 
-> **Status: design stage.** Nothing is implemented yet. This README describes the *planned* behavior. See [docs/requirements-and-design.md](docs/requirements-and-design.md) for the full specification.
+> **Status: early development (milestone 0.1).** Offline analysis of pcap/pcapng files (`discover --read`), `info` and `export` work today. Live capture, the UI and the active/reactive modes are still *planned*. See [docs/requirements-and-design.md](docs/requirements-and-design.md) for the full specification.
 
 ---
 
@@ -55,6 +55,17 @@ Safety measures in the scanning modes: rate limits, a probe budget, a generation
 - Python ≥ 3.11
 - `dumpcap` (from the Wireshark/tshark packages), only needed for live capture
 - A modern web browser
+
+## Try it now (from source)
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -e .
+.venv/bin/netgrapher discover --read capture.pcapng -o net.ngraph   # prints the coverage report
+.venv/bin/netgrapher info net.ngraph
+.venv/bin/netgrapher export net.ngraph --format dot -o net.dot && dot -Tsvg net.dot -o net.svg
+```
+
+Development: `pip install -e . pytest hypothesis mypy ruff`, then `pytest`, `mypy` and `ruff check .`.
 
 ## Installation (planned)
 
@@ -133,4 +144,4 @@ The project is still in the design phase. Feedback on the [design document](docs
 
 ## License
 
-To be decided: Apache-2.0 (proposed) or MIT.
+[MIT](LICENSE).

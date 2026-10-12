@@ -1,1 +1,1 @@
-"""Inference rules: subnet, router, alias, path, names, external."""
+"""Inference rules, grouped by what they conclude. See design §7.1."""

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v0.1 (design stage, no code yet) |
+| **Status** | Draft v0.2 (milestone 0.1 implemented) |
 | **Date** | 2026-10-11 |
 | **Author** | diegovargasj |
 
@@ -204,7 +204,7 @@ In scope:
 | NFR-7 | Security | The UI server MUST bind to 127.0.0.1 only, require a session token, and validate `Host`/`Origin` headers (DNS-rebinding protection). |
 | NFR-8 | Privacy | No telemetry, and no network access other than capture and explicitly enabled probes. The UI MUST load all assets locally (no CDNs). |
 | NFR-9 | Portability | Linux first. OS-specific code (capture, host configuration, probes) MUST sit behind interfaces so macOS and Windows can be added later. |
-| NFR-10 | Licensing | Project license MIT or Apache-2.0 (see §18). Runtime dependencies MUST NOT be GPL (scapy is therefore excluded). Every frontend library's license MUST be audited. |
+| NFR-10 | Licensing | Project license: MIT. Runtime dependencies MUST NOT be GPL (scapy is therefore excluded). Every frontend library's license MUST be audited. |
 | NFR-11 | Determinism | The same input MUST produce the same graph, IDs and export ordering. |
 | NFR-12 | Maintainability | Python ≥ 3.11, fully type-hinted, mypy strict for the core packages, pytest, `uv` + `pyproject.toml`. |
 | NFR-13 | Observability | Structured logging (JSON optional), a progress display for files and live runs, `--verbose`/`--quiet`. |
@@ -249,7 +249,7 @@ v2: a small privileged helper (netgrapher-helper) receives probe requests from t
 |---|---|
 | **Source** | `LiveSource` starts dumpcap and reads its pcapng stream. `FileSource` reads pcap/pcapng. Both yield `(timestamp, interface, linktype, bytes)`. Optionally tees raw bytes to `-w`. |
 | **HostInfo** | Reads the capture host's configuration (`ip -j addr/route/neigh`, `/etc/resolv.conf`) and emits `hostcfg` facts. Linux implementation in v1. |
-| **Decoder** | dpkt-based decoding into a lightweight `DecodedPacket` (L2 evidence fields, IP header, L4 header, selected application payloads). Unwraps VLAN/GRE/IP-in-IP. |
+| **Decoder** | Hand-written struct decoding of L2–L4 headers into a lightweight `DecodedPacket` (L2 evidence fields, IP header, L4 header, payload); dpkt parses application payloads (DHCP, DNS) in the extractors. Unwraps VLAN tags (GRE/IP-in-IP pending). |
 | **Extractors** | One plugin per protocol (ARP, IPv4, ICMP, DHCP, DNS, mDNS, LLMNR, NBNS, OSPF, RIP, VRRP, HSRP, …). Each turns packets into typed **facts**. Extractors hold no global state. |
 | **Fact store** | Append-only, deduplicated, time-aware store of facts with counters and first/last-seen times. Holds IP↔MAC bindings with time intervals. |
 | **Inference engine** | Runs rules (§7) over the fact store and produces entities and links with confidence and evidence. Periodic full recompute (every 2 s in live runs; once at the end for files). |
@@ -305,7 +305,7 @@ A host IP that turns out to belong to a router is **promoted**: it becomes a rou
 | **inferred-path** | router/subnet → subnet/external | `hops` (exact or range), `basis` (`ttl`, `traceroute`), `confidence`. Stands in for an unseen chain of routers without drawing a phantom node per hop. |
 | **uplink** | router → external | `confidence` |
 
-Link IDs are derived from their endpoints: `lnk:<type>:<a>|<b>`.
+Link IDs are derived from their endpoints: `lnk:<type>:<a>|<b>`. Interface links add `#<ip>`, because one router can have several interfaces (for example a real and a virtual address) on the same subnet.
 
 The router–subnet model is the classic L3 topology representation: two routers are adjacent only through a shared subnet, never through a direct edge. Point-to-point /30 and /31 networks appear as small `transit` subnets.
 
@@ -361,23 +361,27 @@ This is simple, monotonic and explainable. Contradicting evidence (for example a
 | R-SUB-DHCP | DHCP ACK with option 1 (mask) and assigned IP | Subnet | 0.95 |
 | R-SUB-OSPF | OSPF Hello network mask / Network-LSA | Subnet | 0.95 |
 | R-SUB-ROUTE | Capture host's routing table entry | Subnet exists (remote or local) | 0.90 |
-| R-SUB-ARP | Set of IPs proven on-link by ARP | Lower bound on the subnet: the smallest prefix containing them | 0.40 |
+| R-SUB-WELLKNOWN | Address in a fixed range (169.254.0.0/16) | Subnet with that prefix | 1.00 |
+| R-SUB-ONLINK | IPs proven on-link (ARP binding, or L2 frames to/from a non-router MAC; TTL hop 0 when there is no L2 header), grouped per VLAN | The smallest prefix containing them, widened to at least /24 (per-/24 if that would be shorter than /16) | 0.40 |
 | R-SUB-HEUR | Private IPs off-link, nothing better known | Assume /24 | 0.20 |
 | R-RTR-HOSTCFG | Default or next-hop gateway in the host's routing table | Router + interface | 1.00 |
 | R-RTR-DHCP | DHCP option 3 (router) | Router + interface | 0.90 |
 | R-RTR-PROTO | Speaks OSPF, RIP, EIGRP, BGP, VRRP or HSRP | Router (VRRP/HSRP virtual IP recorded as a shared interface) | 0.95 |
 | R-RTR-ICMP | Source of ICMP Time Exceeded, Redirect, or Net/Host Unreachable | Router | 0.90 |
 | R-RTR-TRACE | Traceroute hop reply (probe) | Router at hop *n* on a path | 0.95 |
-| R-RTR-MAC | One L2 source MAC carries ≥ 3 distinct off-subnet source IPs | The IP bound to that MAC (via ARP) is a router interface | 0.80 |
+| R-RTR-MAC | One MAC carries ≥ 3 IPs (as L2 source or destination) other than those ARP-bound to it | The IP bound to that MAC (via ARP, or DHCP option 3) is a router interface. If no IP is known, an `unk:` router is created for the MAC. | 0.80 |
 | R-ALIAS-ID | Same OSPF/BGP router ID | Merge routers | 0.95 |
 | R-ALIAS-MAC | Same MAC bound to IPs in different subnets | Merge routers | 0.70 |
 | R-ALIAS-MERCATOR | UDP to a closed port on IP A gets ICMP Port Unreachable from IP B (probe) | Merge routers | 0.85 |
 | R-ALIAS-PTR | Reverse-DNS names share a device pattern (probe modes only) | Merge routers (weak) | 0.30 |
 | R-HOP-TTL | Received TTL vs. inferred initial TTL (64/128/255) | `hop_distance`; an `inferred-path` link when > 0 | 0.60 |
+| R-PATH-GW | A router MAC forwards traffic for members of a remote subnet or for external addresses | `inferred-path` (remote subnet) or `uplink` (Internet) link from that router | 0.80 |
 | R-PATH-TRACE | A complete or partial traceroute | `interface` links along the path; `unk:` nodes for silent hops | 0.90 |
 | R-EXT | Public IP (not RFC1918/CGNAT/link-local/multicast) | Member of `ext:internet` or `ext:as<n>` | 1.00 |
-| R-NAME-* | DNS answers, DHCP option 12, mDNS, LLMNR, NBNS, PTR | `names[]` with source | 0.5–0.9 |
-| R-ROLE-* | DHCP server, DNS server, OSPF DR, … | `roles[]` | 0.9 |
+| R-HOST-OBS | The address sent traffic (or an ARP binding) | Host | 1.00 |
+| R-HOST-REF | The address was only a destination or referenced (e.g. DHCP option) | Host (ARP query targets alone never create hosts) | 0.50 |
+| R-NAME-* | DNS answers, DHCP option 12, mDNS, LLMNR, NBNS, PTR | `names[]` with source (attributes, no separate evidence in 0.1) | — |
+| R-ROLE-* | DHCP server, DNS server, OSPF DR, … | `roles[]` (attributes, no separate evidence in 0.1) | — |
 
 IPv6 rules (RA prefixes and routers, NDP, EUI-64, OSPFv3) are v2.
 
@@ -469,7 +473,7 @@ dumpcap -q -i <if1> [-i <if2> ...] -s 512 -B 64 [-p] [-f "<bpf>"] -w -
 
 - Writes pcapng to stdout (`-w -`). The engine reads it as a stream and optionally tees the raw bytes to the `-w` file.
 - Drop statistics come from pcapng Interface Statistics Blocks, plus a final stats query when the run ends.
-- **Fallback:** if streaming pcapng parsing turns out to be unreliable with dpkt, use classic pcap (`-P`) when there is a single interface.
+- netgrapher has its own forward-only pcap/pcapng reader (`capture/source.py`): dpkt's pcapng reader handles one interface only, ignores Interface Statistics Blocks and needs a seekable file.
 - **Privileges:** `dumpcap` with `cap_net_raw,cap_net_admin=eip`. On Debian/Kali: `sudo dpkg-reconfigure wireshark-common` (allow non-superusers), then `sudo usermod -aG wireshark $USER`. `netgrapher doctor` checks this.
 
 ### 9.2 Host configuration (Linux)
@@ -677,14 +681,18 @@ netgrapher/
 ├── src/netgrapher/
 │   ├── __init__.py
 │   ├── cli.py                  # typer app: discover, ui, export, info, doctor
-│   ├── config.py               # defaults, option models (pydantic)
+│   ├── config.py               # modes and defaults
+│   ├── net.py                  # address classification helpers
+│   ├── pipeline.py             # raw packets -> decoded -> facts
+│   ├── flows.py                # optional flow overlay
+│   ├── discover.py             # discovery runs -> Project
 │   ├── capture/
-│   │   ├── source.py           # Source protocol, LiveSource (dumpcap), FileSource
+│   │   ├── source.py           # pcap/pcapng reader, FileSource, LiveSource (dumpcap, 0.2)
 │   │   └── hostinfo/           # HostInfo protocol; linux.py
 │   ├── decode/
 │   │   ├── packet.py           # DecodedPacket
 │   │   └── decoder.py          # linktype dispatch, encapsulation unwrapping
-│   ├── extract/                # one module per protocol: arp, ipv4, icmp, dhcp, dns, ospf, vrrp, ...
+│   ├── extract/                # ipv4, arp, icmp, dhcp, dns (+mDNS/LLMNR), routing (OSPF, EIGRP, RIP, BGP, VRRP, HSRP)
 │   ├── facts/
 │   │   ├── model.py            # Fact, FactKind, Provenance
 │   │   └── store.py
@@ -692,7 +700,8 @@ netgrapher/
 │   │   ├── engine.py
 │   │   ├── weights.py
 │   │   ├── confidence.py
-│   │   └── rules/              # subnet.py, router.py, alias.py, path.py, names.py, external.py
+│   │   ├── context.py          # fact indexes, evidence factory, shared stage state
+│   │   └── rules/              # subnets.py, routers.py (incl. aliases), hosts.py (incl. external), paths.py
 │   ├── graph/
 │   │   ├── model.py            # entities, links
 │   │   ├── ids.py              # stable IDs, alias table
@@ -708,9 +717,10 @@ netgrapher/
 │   ├── project/
 │   │   ├── format.py
 │   │   ├── migrate.py
+│   │   ├── annotations.py      # labels, hiding cascade
 │   │   └── store.py
 │   ├── report.py               # coverage report
-│   ├── export/                 # graphml.py, gexf.py, jsonlink.py, dot.py
+│   ├── export/                 # common.py, graphml.py, gexf.py, jsonlink.py, dot.py
 │   ├── server/
 │   │   ├── app.py
 │   │   ├── api.py
@@ -763,7 +773,7 @@ Sample pcap sources: the Wireshark SampleCaptures wiki, plus captures generated 
 |---|---|---|
 | Passive inference is too weak on quiet or switched networks | Sparse graphs | Coverage report explains the gaps; reactive mode; lab-tuned weights. |
 | Pure-Python decoding is too slow | Drops or slow file processing | Decode only the needed headers; filter early by protocol; profile; per-file multiprocessing; consider PyPy. |
-| dpkt's pcapng reader and non-seekable stdin | Live capture broken | Validate early (spike in 0.2). Fallback: classic pcap (`-P`) for a single interface. |
+| ~~dpkt's pcapng reader and non-seekable stdin~~ | — | Resolved in 0.1: own forward-only pcap/pcapng reader with multi-interface and ISB support. |
 | Frontend library licenses (e.g. **cytoscape-svg is reported to be GPL-3.0**; elkjs is EPL-2.0) | License conflict | Audit before vendoring. If needed, write a small in-house SVG serializer. Check EPL-2.0 compatibility for elkjs or use dagre (MIT) instead. |
 | `ping_group_range` disallows ping sockets on some systems | No ICMP echo in v1 | `doctor` detects it and suggests the sysctl; TCP connect probes as fallback. |
 | Router merges and splits break annotations | Lost user edits | Alias table, merge rules, tests. |
@@ -776,10 +786,9 @@ Sample pcap sources: the Wireshark SampleCaptures wiki, plus captures generated 
 
 | # | Item | Proposal |
 |---|---|---|
-| 1 | Final license: MIT or Apache-2.0 | **Apache-2.0** (explicit patent grant). Both meet NFR-10. |
-| 2 | Default numbers (rates, budget, timeouts, convergence window, rule weights) | Use the values in this document and recalibrate after the first lab runs. |
-| 3 | SVG export library | Decide after the license audit (§17). |
-| 4 | ASN database format for `--asn-db` | Support an iptoasn.com-style TSV first. |
+| 1 | Default numbers (rates, budget, timeouts, convergence window, rule weights) | Use the values in this document and recalibrate after the first lab runs. |
+| 2 | SVG export library | Decide after the license audit (§17). |
+| 3 | ASN database format for `--asn-db` | Support an iptoasn.com-style TSV first. |
 
 ---
 
@@ -801,3 +810,4 @@ Sample pcap sources: the Wireshark SampleCaptures wiki, plus captures generated 
 | 2026-10-11 | UI features: rename, hide (manual + filters, no delete), save, open, PNG/SVG screenshots with anonymization. Hosts in collapsible subnet containers. |
 | 2026-10-11 | Annotations stored separately with stable IDs. Resume/merge designed now, implemented in v2. |
 | 2026-10-11 | Project format: versioned gzipped JSON (`.ngraph`). |
+| 2026-10-11 | License: MIT. |

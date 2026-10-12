@@ -1,0 +1,700 @@
+{
+  "aliases": {},
+  "annotations": {},
+  "entities": {
+    "ext:internet": {
+      "addresses": [
+        "8.8.8.8",
+        "93.184.215.14"
+      ],
+      "as_name": null,
+      "asn": null,
+      "confidence": 1.0,
+      "evidence": [
+        "ev:88706eae1a7d"
+      ],
+      "host_count": 2,
+      "type": "external"
+    },
+    "host:10.20.0.5": {
+      "confidence": 1.0,
+      "evidence": [
+        "ev:e8a393b16844"
+      ],
+      "first_seen": 1760000012.0,
+      "hop_distance": 3,
+      "ip": "10.20.0.5",
+      "l2_evidence": {
+        "macs": []
+      },
+      "last_seen": 1760000013.0,
+      "names": [],
+      "os_family_guess": "windows",
+      "roles": [],
+      "subnet_id": "net:10.20.0.0/24",
+      "type": "host"
+    },
+    "host:10.20.0.6": {
+      "confidence": 1.0,
+      "evidence": [
+        "ev:65c8564971e6"
+      ],
+      "first_seen": 1760000014.0,
+      "hop_distance": 3,
+      "ip": "10.20.0.6",
+      "l2_evidence": {
+        "macs": []
+      },
+      "last_seen": 1760000015.0,
+      "names": [],
+      "os_family_guess": "unix-like",
+      "roles": [],
+      "subnet_id": "net:10.20.0.0/24",
+      "type": "host"
+    },
+    "host:192.168.1.10": {
+      "confidence": 1.0,
+      "evidence": [
+        "ev:dab398bb3d42"
+      ],
+      "first_seen": 1760000001.0,
+      "hop_distance": 0,
+      "ip": "192.168.1.10",
+      "l2_evidence": {
+        "macs": [
+          "02:00:00:00:00:0a"
+        ]
+      },
+      "last_seen": 1760000018.0,
+      "names": [
+        {
+          "name": "alice-laptop",
+          "source": "dhcp"
+        }
+      ],
+      "os_family_guess": "unix-like",
+      "roles": [],
+      "subnet_id": "net:192.168.1.0/24",
+      "type": "host"
+    },
+    "host:192.168.1.20": {
+      "confidence": 1.0,
+      "evidence": [
+        "ev:a97a539c6475"
+      ],
+      "first_seen": 1760000017.0,
+      "hop_distance": 0,
+      "ip": "192.168.1.20",
+      "l2_evidence": {
+        "macs": [
+          "02:00:00:00:00:14"
+        ]
+      },
+      "last_seen": 1760000019.0,
+      "names": [
+        {
+          "name": "printer.local",
+          "source": "mdns"
+        }
+      ],
+      "os_family_guess": "unix-like",
+      "roles": [],
+      "subnet_id": "net:192.168.1.0/24",
+      "type": "host"
+    },
+    "net:10.0.0.0/24": {
+      "confidence": 0.2,
+      "dhcp_servers": [],
+      "evidence": [
+        "ev:05373aaf71ce"
+      ],
+      "gateway_ids": [
+        "rtr:10.0.0.2"
+      ],
+      "kind": "remote",
+      "prefix": "10.0.0.0/24",
+      "prefix_confidence": 0.2,
+      "type": "subnet",
+      "version": 4
+    },
+    "net:10.20.0.0/24": {
+      "confidence": 0.2,
+      "dhcp_servers": [],
+      "evidence": [
+        "ev:6616b848457f"
+      ],
+      "gateway_ids": [],
+      "kind": "remote",
+      "prefix": "10.20.0.0/24",
+      "prefix_confidence": 0.2,
+      "type": "subnet",
+      "version": 4
+    },
+    "net:192.168.1.0/24": {
+      "confidence": 0.9975,
+      "dhcp_servers": [
+        "192.168.1.1"
+      ],
+      "evidence": [
+        "ev:3005aaf631af",
+        "ev:3e524f8491ac"
+      ],
+      "gateway_ids": [
+        "rtr:192.168.1.1"
+      ],
+      "kind": "local",
+      "prefix": "192.168.1.0/24",
+      "prefix_confidence": 0.9975,
+      "type": "subnet",
+      "version": 4
+    },
+    "rtr:10.0.0.2": {
+      "confidence": 0.9,
+      "evidence": [
+        "ev:2b57ccdd87e9"
+      ],
+      "hop_distance": 1,
+      "interfaces": [
+        {
+          "confidence": 0.9,
+          "ip": "10.0.0.2",
+          "subnet": "net:10.0.0.0/24",
+          "virtual": false
+        }
+      ],
+      "l2_evidence": {
+        "macs": []
+      },
+      "names": [],
+      "protocols": [],
+      "roles": [],
+      "router_ids": [],
+      "type": "router"
+    },
+    "rtr:192.168.1.1": {
+      "confidence": 0.999,
+      "evidence": [
+        "ev:7d72e021d803",
+        "ev:9c5bc4d551b3",
+        "ev:bdb786367bb5"
+      ],
+      "hop_distance": 0,
+      "interfaces": [
+        {
+          "confidence": 0.999,
+          "ip": "192.168.1.1",
+          "subnet": "net:192.168.1.0/24",
+          "virtual": false
+        }
+      ],
+      "l2_evidence": {
+        "macs": [
+          "02:00:00:00:00:01"
+        ]
+      },
+      "names": [],
+      "protocols": [
+        "ospf"
+      ],
+      "roles": [
+        "default-gateway",
+        "dhcp-server",
+        "dns-server"
+      ],
+      "router_ids": [
+        "10.255.0.1"
+      ],
+      "type": "router"
+    }
+  },
+  "evidence": {
+    "ev:05373aaf71ce": {
+      "frames": [
+        17
+      ],
+      "probe_id": null,
+      "provenance": "passive",
+      "rule": "R-SUB-HEUR",
+      "run": "r1",
+      "summary": "1 off-link private addresses; /24 assumed",
+      "weight": 0.2
+    },
+    "ev:1c21aae26511": {
+      "frames": [
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "probe_id": null,
+      "provenance": "passive",
+      "rule": "R-PATH-GW",
+      "run": "r1",
+      "summary": "rtr:192.168.1.1 forwards Internet traffic",
+      "weight": 0.8
+    },
+    "ev:2b57ccdd87e9": {
+      "frames": [
+        17
+      ],
+      "probe_id": null,
+      "provenance": "passive",
+      "rule": "R-RTR-ICMP",
+      "run": "r1",
+      "summary": "Sent 1 kind(s) of router-only ICMP (time exceeded, unreachable, redirect)",
+      "weight": 0.9
+    },
+    "ev:3005aaf631af": {
+      "frames": [
+        2
+      ],
+      "probe_id": null,
+      "provenance": "passive",
+      "rule": "R-SUB-DHCP",
+      "run": "r1",
+      "summary": "DHCP lease with subnet mask (1 message types/clients)",
+      "weight": 0.95
+    },
+    "ev:3e524f8491ac": {
+      "frames": [
+        21
+      ],
+      "probe_id": null,
+      "provenance": "passive",
+      "rule": "R-SUB-OSPF",
+      "run": "r1",
+      "summary": "OSPF Hello network mask (1 speakers)",
+      "weight": 0.95
+    },
+    "ev:65c8564971e6": {
+      "frames": [
+        16
+      ],
+      "probe_id": null,
+      "provenance": "passive",
+      "rule": "R-HOST-OBS",
+      "run": "r1",
+      "summary": "Sent traffic",
+      "weight": 1.0
+    },
+    "ev:6616b848457f": {
+      "frames": [
+        13,
+        14,
+        15,
+        16
+      ],
+      "probe_id": null,
+      "provenance": "passive",
+      "rule": "R-SUB-HEUR",
+      "run": "r1",
+      "summary": "2 off-link private addresses; /24 assumed",
+      "weight": 0.2
+    },
+    "ev:687ad5a5812e": {
+      "frames": [
+        14,
+        16
+      ],
+      "probe_id": null,
+      "provenance": "passive",
+      "rule": "R-HOP-TTL",
+      "run": "r1",
+      "summary": "Closest member is 3 hop(s) away",
+      "weight": 0.6
+    },
+    "ev:7d72e021d803": {
+      "frames": [
+        2
+      ],
+      "probe_id": null,
+      "provenance": "passive",
+      "rule": "R-RTR-DHCP",
+      "run": "r1",
+      "summary": "Announced as router (DHCP option 3) in 1 lease(s)",
+      "weight": 0.9
+    },
+    "ev:7e33c72fb021": {
+      "frames": [
+        17
+      ],
+      "probe_id": null,
+      "provenance": "passive",
+      "rule": "R-HOP-TTL",
+      "run": "r1",
+      "summary": "Closest member is 1 hop(s) away",
+      "weight": 0.6
+    },
+    "ev:88706eae1a7d": {
+      "frames": [
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "probe_id": null,
+      "provenance": "passive",
+      "rule": "R-EXT",
+      "run": "r1",
+      "summary": "2 globally routable addresses",
+      "weight": 1.0
+    },
+    "ev:9c5bc4d551b3": {
+      "frames": [
+        21
+      ],
+      "probe_id": null,
+      "provenance": "passive",
+      "rule": "R-RTR-PROTO",
+      "run": "r1",
+      "summary": "Routing/redundancy protocol speaker (1 observation(s))",
+      "weight": 0.95
+    },
+    "ev:a97a539c6475": {
+      "frames": [
+        19,
+        20
+      ],
+      "probe_id": null,
+      "provenance": "passive",
+      "rule": "R-HOST-OBS",
+      "run": "r1",
+      "summary": "Sent traffic",
+      "weight": 1.0
+    },
+    "ev:bdb786367bb5": {
+      "frames": [
+        2,
+        4,
+        21
+      ],
+      "probe_id": null,
+      "provenance": "passive",
+      "rule": "R-RTR-MAC",
+      "run": "r1",
+      "summary": "Its MAC forwards traffic for many other addresses",
+      "weight": 0.8
+    },
+    "ev:c5c0cbf2e1a9": {
+      "frames": [
+        17
+      ],
+      "probe_id": null,
+      "provenance": "passive",
+      "rule": "R-PATH-GW",
+      "run": "r1",
+      "summary": "rtr:192.168.1.1 forwards traffic for net:10.0.0.0/24",
+      "weight": 0.8
+    },
+    "ev:dab398bb3d42": {
+      "frames": [
+        3,
+        5,
+        7,
+        9,
+        11,
+        13,
+        15,
+        18
+      ],
+      "probe_id": null,
+      "provenance": "passive",
+      "rule": "R-HOST-OBS",
+      "run": "r1",
+      "summary": "Sent traffic",
+      "weight": 1.0
+    },
+    "ev:e2a7ec67c2f6": {
+      "frames": [
+        13,
+        14,
+        15,
+        16
+      ],
+      "probe_id": null,
+      "provenance": "passive",
+      "rule": "R-PATH-GW",
+      "run": "r1",
+      "summary": "rtr:192.168.1.1 forwards traffic for net:10.20.0.0/24",
+      "weight": 0.8
+    },
+    "ev:e8a393b16844": {
+      "frames": [
+        14
+      ],
+      "probe_id": null,
+      "provenance": "passive",
+      "rule": "R-HOST-OBS",
+      "run": "r1",
+      "summary": "Sent traffic",
+      "weight": 1.0
+    }
+  },
+  "flows": [
+    {
+      "bytes": 296,
+      "dst": "192.168.1.10",
+      "first_seen": 1760000001.0,
+      "last_seen": 1760000001.0,
+      "packets": 1,
+      "proto": 17,
+      "src": "192.168.1.1"
+    },
+    {
+      "bytes": 120,
+      "dst": "93.184.215.14",
+      "first_seen": 1760000006.0,
+      "last_seen": 1760000010.0,
+      "packets": 3,
+      "proto": 6,
+      "src": "192.168.1.10"
+    },
+    {
+      "bytes": 120,
+      "dst": "192.168.1.10",
+      "first_seen": 1760000007.0,
+      "last_seen": 1760000011.0,
+      "packets": 3,
+      "proto": 6,
+      "src": "93.184.215.14"
+    },
+    {
+      "bytes": 67,
+      "dst": "192.168.1.10",
+      "first_seen": 1760000005.0,
+      "last_seen": 1760000005.0,
+      "packets": 1,
+      "proto": 17,
+      "src": "8.8.8.8"
+    },
+    {
+      "bytes": 56,
+      "dst": "192.168.1.10",
+      "first_seen": 1760000016.0,
+      "last_seen": 1760000016.0,
+      "packets": 1,
+      "proto": 1,
+      "src": "10.0.0.2"
+    },
+    {
+      "bytes": 40,
+      "dst": "192.168.1.10",
+      "first_seen": 1760000013.0,
+      "last_seen": 1760000013.0,
+      "packets": 1,
+      "proto": 6,
+      "src": "10.20.0.5"
+    },
+    {
+      "bytes": 40,
+      "dst": "192.168.1.10",
+      "first_seen": 1760000015.0,
+      "last_seen": 1760000015.0,
+      "packets": 1,
+      "proto": 6,
+      "src": "10.20.0.6"
+    },
+    {
+      "bytes": 40,
+      "dst": "10.20.0.5",
+      "first_seen": 1760000012.0,
+      "last_seen": 1760000012.0,
+      "packets": 1,
+      "proto": 6,
+      "src": "192.168.1.10"
+    },
+    {
+      "bytes": 40,
+      "dst": "10.20.0.6",
+      "first_seen": 1760000014.0,
+      "last_seen": 1760000014.0,
+      "packets": 1,
+      "proto": 6,
+      "src": "192.168.1.10"
+    },
+    {
+      "bytes": 40,
+      "dst": "192.168.1.20",
+      "first_seen": 1760000017.0,
+      "last_seen": 1760000017.0,
+      "packets": 1,
+      "proto": 6,
+      "src": "192.168.1.10"
+    },
+    {
+      "bytes": 40,
+      "dst": "8.8.8.8",
+      "first_seen": 1760000004.0,
+      "last_seen": 1760000004.0,
+      "packets": 1,
+      "proto": 17,
+      "src": "192.168.1.10"
+    },
+    {
+      "bytes": 40,
+      "dst": "192.168.1.10",
+      "first_seen": 1760000018.0,
+      "last_seen": 1760000018.0,
+      "packets": 1,
+      "proto": 6,
+      "src": "192.168.1.20"
+    }
+  ],
+  "format": "netgrapher-project",
+  "links": {
+    "lnk:inferred-path:rtr:192.168.1.1|net:10.0.0.0/24": {
+      "a": "rtr:192.168.1.1",
+      "b": "net:10.0.0.0/24",
+      "basis": [
+        "gateway-mac",
+        "ttl"
+      ],
+      "confidence": 0.92,
+      "evidence": [
+        "ev:c5c0cbf2e1a9",
+        "ev:7e33c72fb021"
+      ],
+      "hops": 1,
+      "type": "inferred-path"
+    },
+    "lnk:inferred-path:rtr:192.168.1.1|net:10.20.0.0/24": {
+      "a": "rtr:192.168.1.1",
+      "b": "net:10.20.0.0/24",
+      "basis": [
+        "gateway-mac",
+        "ttl"
+      ],
+      "confidence": 0.92,
+      "evidence": [
+        "ev:e2a7ec67c2f6",
+        "ev:687ad5a5812e"
+      ],
+      "hops": 3,
+      "type": "inferred-path"
+    },
+    "lnk:interface:rtr:10.0.0.2|net:10.0.0.0/24#10.0.0.2": {
+      "a": "rtr:10.0.0.2",
+      "b": "net:10.0.0.0/24",
+      "confidence": 0.9,
+      "evidence": [
+        "ev:2b57ccdd87e9"
+      ],
+      "ip": "10.0.0.2",
+      "type": "interface",
+      "virtual": false
+    },
+    "lnk:interface:rtr:192.168.1.1|net:192.168.1.0/24#192.168.1.1": {
+      "a": "rtr:192.168.1.1",
+      "b": "net:192.168.1.0/24",
+      "confidence": 0.999,
+      "evidence": [
+        "ev:7d72e021d803",
+        "ev:bdb786367bb5",
+        "ev:9c5bc4d551b3"
+      ],
+      "ip": "192.168.1.1",
+      "type": "interface",
+      "virtual": false
+    },
+    "lnk:member:host:10.20.0.5|net:10.20.0.0/24": {
+      "a": "host:10.20.0.5",
+      "b": "net:10.20.0.0/24",
+      "confidence": 0.2,
+      "evidence": [
+        "ev:6616b848457f"
+      ],
+      "type": "member"
+    },
+    "lnk:member:host:10.20.0.6|net:10.20.0.0/24": {
+      "a": "host:10.20.0.6",
+      "b": "net:10.20.0.0/24",
+      "confidence": 0.2,
+      "evidence": [
+        "ev:6616b848457f"
+      ],
+      "type": "member"
+    },
+    "lnk:member:host:192.168.1.10|net:192.168.1.0/24": {
+      "a": "host:192.168.1.10",
+      "b": "net:192.168.1.0/24",
+      "confidence": 0.9975,
+      "evidence": [
+        "ev:3005aaf631af",
+        "ev:3e524f8491ac"
+      ],
+      "type": "member"
+    },
+    "lnk:member:host:192.168.1.20|net:192.168.1.0/24": {
+      "a": "host:192.168.1.20",
+      "b": "net:192.168.1.0/24",
+      "confidence": 0.9975,
+      "evidence": [
+        "ev:3005aaf631af",
+        "ev:3e524f8491ac"
+      ],
+      "type": "member"
+    },
+    "lnk:uplink:rtr:192.168.1.1|ext:internet": {
+      "a": "rtr:192.168.1.1",
+      "b": "ext:internet",
+      "confidence": 0.8,
+      "evidence": [
+        "ev:1c21aae26511"
+      ],
+      "type": "uplink"
+    }
+  },
+  "runs": [
+    {
+      "cidrs": [],
+      "ended": "2025-10-09T08:53:42.000000Z",
+      "facts": 49,
+      "id": "r1",
+      "interfaces": [
+        {
+          "linktype": 1,
+          "name": null,
+          "snaplen": 65535
+        }
+      ],
+      "mode": "passive",
+      "scope": null,
+      "source": "file",
+      "started": "2025-10-09T08:53:20.000000Z",
+      "stats": {
+        "extractor_errors": 0,
+        "if_dropped": {},
+        "if_received": {},
+        "ipv4": 19,
+        "ipv6_skipped": 1,
+        "linktypes": [
+          1
+        ],
+        "malformed": 1,
+        "os_dropped": {},
+        "packets": 23,
+        "protocols": {
+          "arp": 2,
+          "dhcp": 2,
+          "dns": 2,
+          "icmp": 1,
+          "ipv4": 18,
+          "ospf": 1
+        },
+        "truncated_tail": false,
+        "unsupported_linktype": 0
+      },
+      "stop_reason": "end-of-file"
+    }
+  ],
+  "version": 1,
+  "view": {}
+}

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, NoReturn
 
 import typer
 
 from netgrapher import __version__
+from netgrapher.capture.source import CaptureFormatError
 from netgrapher.config import (
     CaptureConfig,
     DiscoveryConfig,
@@ -16,6 +17,10 @@ from netgrapher.config import (
     ProbeConfig,
     ScopeConfig,
 )
+from netgrapher.export import ExportFormat, export_project
+from netgrapher.project.format import Project
+from netgrapher.project.store import ProjectError, load, save
+from netgrapher.report import build_report
 
 app = typer.Typer(
     name="netgrapher",
@@ -29,16 +34,17 @@ EXIT_USAGE = 2
 EXIT_ENVIRONMENT = 3
 
 
-class ExportFormat(StrEnum):
-    GRAPHML = "graphml"
-    GEXF = "gexf"
-    JSON = "json"
-    DOT = "dot"
-
-
 def _not_implemented(command: str) -> NoReturn:
     typer.echo(f"netgrapher {command}: not implemented yet", err=True)
     raise typer.Exit(EXIT_RUNTIME)
+
+
+def _load(path: Path) -> Project:
+    try:
+        return load(path)
+    except ProjectError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(EXIT_RUNTIME) from exc
 
 
 def _version_callback(value: bool) -> None:
@@ -141,7 +147,21 @@ def discover(
         typer.echo(str(exc), err=True)
         raise typer.Exit(EXIT_USAGE) from exc
 
-    _not_implemented("discover")
+    if read is None:
+        typer.echo("live capture is not implemented yet (milestone 0.2); use --read", err=True)
+        raise typer.Exit(EXIT_RUNTIME)
+
+    from netgrapher.discover import run_file
+
+    output = output or Path(f"netgrapher-{datetime.now():%Y%m%d-%H%M%S}.ngraph")
+    try:
+        project = run_file(read, record_flows=flows)
+    except (OSError, CaptureFormatError) as exc:
+        typer.echo(f"cannot read {read}: {exc}", err=True)
+        raise typer.Exit(EXIT_RUNTIME) from exc
+    save(project, output)
+    typer.echo(build_report(project))
+    typer.echo(f"\nProject saved to {output}")
 
 
 @app.command("ui")
@@ -162,13 +182,17 @@ def export(
     include_hidden: Annotated[bool, typer.Option(help="Include hidden items.")] = False,
 ) -> None:
     """Export a project to GraphML, GEXF, JSON or DOT."""
-    _not_implemented("export")
+    text = export_project(_load(project), format, include_hidden=include_hidden)
+    if output is None:
+        typer.echo(text, nl=False)
+    else:
+        output.write_text(text, encoding="utf-8")
 
 
 @app.command()
 def info(project: Annotated[Path, typer.Argument(help="Project file (.ngraph).")]) -> None:
     """Print a project summary and its coverage report."""
-    _not_implemented("info")
+    typer.echo(build_report(_load(project)))
 
 
 @app.command()
