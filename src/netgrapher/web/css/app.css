@@ -72,6 +72,8 @@ input[type="search"] { width: 220px; }
   padding: 4px 10px; border-top: 1px solid var(--border); background: var(--panel);
 }
 .dirty { color: var(--accent); }
+.live { color: var(--node-self); font-variant-numeric: tabular-nums; }
+#btn-pause { padding: 1px 8px; }
 h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 14px 0 6px; }
 h3 { font-size: 15px; margin: 0 0 2px; word-break: break-all; }
 .muted { color: var(--muted); }

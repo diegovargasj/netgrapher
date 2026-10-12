@@ -2,7 +2,7 @@
 
 **Builds a map of the routers, subnets and hosts on a network from the traffic it sees, and lets you explore and edit that map interactively.**
 
-> **Status: early development (milestone 0.3).** Passive discovery works today, both live (`discover`, via dumpcap) and from pcap/pcapng files (`discover --read`), along with `info`, `export`, `doctor` and the interactive UI (`ui`). Live updates in the UI and the active/reactive modes are still *planned*. See [docs/requirements-and-design.md](docs/requirements-and-design.md) for the full specification.
+> **Status: early development (milestone 0.4).** Passive discovery works today, both live (`discover`, via dumpcap) and from pcap/pcapng files (`discover --read`), with an interactive UI that can follow a capture as it runs (`discover --ui`), plus `info`, `export`, `doctor` and `ui`. The active/reactive modes are still *planned*. See [docs/requirements-and-design.md](docs/requirements-and-design.md) for the full specification.
 
 ---
 
@@ -62,6 +62,7 @@ Safety measures in the scanning modes: rate limits, a probe budget, a generation
 python3 -m venv .venv && .venv/bin/pip install -e .
 .venv/bin/netgrapher doctor                                          # check dumpcap permissions
 .venv/bin/netgrapher discover --duration 10m -w run.pcapng -o net.ngraph   # live, passive
+.venv/bin/netgrapher discover --duration 10m --ui -o net.ngraph     # …and watch it grow in the UI
 .venv/bin/netgrapher discover --read capture.pcapng -o net.ngraph   # or from a file
 .venv/bin/netgrapher info net.ngraph
 .venv/bin/netgrapher ui net.ngraph                                   # opens the UI in your browser

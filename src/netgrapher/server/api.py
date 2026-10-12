@@ -2,14 +2,27 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, Header, HTTPException, Query, Request, Response
+from fastapi import (
+    APIRouter,
+    Body,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from pydantic import BaseModel, ConfigDict, Field
 
 from netgrapher.export import ExportFormat, export_project
 from netgrapher.graph.ids import AliasTable
+from netgrapher.graph.model import Graph
 from netgrapher.project.store import ProjectError, dumps, load, loads
 from netgrapher.report import build_report
 from netgrapher.server.auth import COOKIE, token_matches
@@ -63,7 +76,7 @@ class OpenPath(BaseModel):
     path: str
 
 
-def build_router(state: AppState, token: str) -> APIRouter:
+def build_router(state: AppState, token: str, allowed_hosts: Callable[[], set[str]]) -> APIRouter:
     router = APIRouter(prefix="/api")
 
     def resolve(item_id: str) -> str:
@@ -119,17 +132,51 @@ def build_router(state: AppState, token: str) -> APIRouter:
     def patch_annotation(item_id: str, patch: AnnotationPatch) -> dict[str, Any]:
         with state.lock:
             resolved = resolve(item_id)
-            return {"id": resolved, "annotation": apply(resolved, patch)}
+            annotation = apply(resolved, patch)
+        state.bus.publish({"type": "annotations", "annotations": {resolved: annotation}})
+        return {"id": resolved, "annotation": annotation}
 
     @router.post("/annotations:batch")
     def patch_batch(items: Annotated[list[BatchItem], Body(max_length=20_000)]) -> dict[str, Any]:
         with state.lock:
             resolved = [resolve(item.id) for item in items]  # all-or-nothing
-            return {
-                "annotations": {
-                    rid: apply(rid, item.patch) for rid, item in zip(resolved, items, strict=True)
-                }
+            changed = {
+                rid: apply(rid, item.patch) for rid, item in zip(resolved, items, strict=True)
             }
+        state.bus.publish({"type": "annotations", "annotations": changed})
+        return {"annotations": changed}
+
+    @router.websocket("/events")
+    async def events(websocket: WebSocket) -> None:
+        # HTTP middleware does not see WebSocket handshakes: check Host, Origin and session here.
+        hosts = allowed_hosts()
+        origin = websocket.headers.get("origin")
+        if (
+            websocket.headers.get("host") not in hosts
+            or (origin is not None and origin.removeprefix("http://") not in hosts)
+            or not token_matches(token, websocket.cookies.get(COOKIE))
+        ):
+            await websocket.close(code=1008)
+            return
+        await websocket.accept()
+        queue = state.bus.subscribe()
+        try:
+            await websocket.send_json({"type": "hello", "seq": state.seq})
+            while True:
+                receive = asyncio.ensure_future(websocket.receive())
+                get = asyncio.ensure_future(queue.get())
+                done, _ = await asyncio.wait({receive, get}, return_when=asyncio.FIRST_COMPLETED)
+                if receive in done:
+                    get.cancel()
+                    if receive.result().get("type") == "websocket.disconnect":
+                        return
+                    continue
+                receive.cancel()
+                await websocket.send_json(get.result())
+        except (WebSocketDisconnect, RuntimeError):
+            return
+        finally:
+            state.bus.unsubscribe(queue)
 
     @router.put("/view")
     def put_view(view: View) -> dict[str, Any]:
@@ -211,21 +258,26 @@ def _safe(name: str) -> str:
     return "".join(c for c in name if c.isalnum() or c in "._-") or "netgrapher"
 
 
+def entity_payload(graph: Graph, eid: str) -> dict[str, Any]:
+    entity = graph.entities[eid]
+    provenance = sorted(
+        {
+            part
+            for e in entity.evidence
+            if e in graph.evidence
+            for part in graph.evidence[e].provenance.split("+")
+        }
+    )
+    return {**entity.to_dict(), "provenance": provenance}
+
+
 def project_payload(state: AppState) -> dict[str, Any]:
     project = state.project
     graph = project.graph
-    entities = {}
-    for eid, entity in graph.entities.items():
-        provenance = sorted(
-            {
-                part
-                for e in entity.evidence
-                if e in graph.evidence
-                for part in graph.evidence[e].provenance.split("+")
-            }
-        )
-        entities[eid] = {**entity.to_dict(), "provenance": provenance}
+    entities = {eid: entity_payload(graph, eid) for eid in graph.entities}
     return {
+        "seq": state.seq,
+        "live": state.live,
         "path": str(state.path) if state.path else None,
         "name": state.path.name if state.path else "untitled",
         "dirty": state.dirty,

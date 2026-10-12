@@ -9,9 +9,11 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from netgrapher.project.format import Project
 from netgrapher.project.store import save
+from netgrapher.server.events import EventBus
 
 AUTOSAVE_INTERVAL_S = 30.0
 MAX_RECENT = 10
@@ -32,12 +34,17 @@ class AppState:
     path: Path | None = None
     dirty: bool = False
     lock: threading.RLock = field(default_factory=threading.RLock)
+    bus: EventBus = field(default_factory=EventBus)
+    seq: int = 0  # increases with every graph change pushed to clients
+    live: dict[str, Any] | None = None  # statistics of a discovery run in progress
 
     def open(self, project: Project, path: Path | None) -> None:
         with self.lock:
             self.project = project
             self.path = path.resolve() if path else None
             self.dirty = False
+            self.seq += 1
+            self.live = None
             if self.path:
                 remember_recent(self.path)
 

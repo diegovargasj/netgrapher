@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v0.4 (milestones 0.1–0.3 implemented) |
+| **Status** | Draft v0.5 (milestones 0.1–0.4 implemented) |
 | **Date** | 2026-10-11 |
 | **Author** | diegovargasj |
 
@@ -265,7 +265,8 @@ v2: a small privileged helper (netgrapher-helper) receives probe requests from t
 ### 5.3 Concurrency
 
 - *As implemented in 0.2:* a **reader thread** frames packets from dumpcap's pipe into a bounded queue (100,000 packets). The **main thread** decodes, extracts and runs inference every 2 s, and checks stop conditions, so the fact store has a single writer and needs no locks. Inference holds up ingestion while it runs; the queue and dumpcap's buffer absorb that. Incremental inference is a later optimization.
-- *Planned:* the engine moves to an **asyncio** event loop when the prober and API server arrive (0.4/0.5).
+- *As implemented in 0.4:* with `--ui`, the API server (uvicorn, asyncio) runs in its own thread; the engine thread hands it graph diffs through a thread-safe event bus (`server/events.py`).
+- *Planned:* the engine itself may move to asyncio when the prober arrives (0.5).
 - The prober, planner, inference ticker and API server (uvicorn) are asyncio tasks.
 - The fact store is written from one consumer task only, so it needs no locks. Inference works on a consistent snapshot between ingestion batches.
 - Multiprocessing is deferred. If profiling shows decoding is the bottleneck, decoding can be split across processes per capture file or interface.
@@ -618,9 +619,29 @@ All endpoints require the session token (passed once in the URL fragment at laun
 | POST | `/api/project/open` | Open an uploaded `.ngraph` file, or a path from the recent list |
 | GET | `/api/project/recent` | Recently opened projects |
 | GET | `/api/report` | Coverage report |
-| WS | `/api/events` | Live stream: `entity_added`, `entity_updated`, `entity_removed`, `alias`, `link_*`, `run_stats`, `run_ended` |
+| WS | `/api/events` | Live stream (see §11.6) |
 
-### 11.6 Screenshot export
+### 11.6 Live updates (implemented in 0.4)
+
+`discover --ui` starts the UI server in a background thread before capturing. After every inference pass (every 2 s) the engine diffs the new graph against the previous one (`graph/diff.py`) and publishes one event; the UI applies it incrementally.
+
+| Event | Content |
+|---|---|
+| `hello` | Sent on connect, with the server's current `seq`. If it differs from the client's snapshot, the client reloads (`resync`). |
+| `graph` | `seq`, changed/added `entities` and `links`, `removed`, `links_removed`, `aliases` (old → new ID), the migrated `annotations` of alias targets, label `conflicts`. |
+| `run_stats` | Elapsed time, packets, entity count, stop reason once stopping. |
+| `run_ended` | The run is over and the project was saved to `path`; the UI now allows Save. |
+| `annotations` | Annotation changes made through the API (keeps several tabs in sync). |
+| `resync` | The client fell too far behind (queue of 2000 events overflowed): reload the project. |
+
+- **Ordering:** each `graph` event carries `seq`, which also appears in the project payload. Clients ignore events at or below their snapshot's `seq` and reload on a gap.
+- **Stable layout:** existing nodes never move. New hosts are placed next to their siblings, other new nodes next to their neighbours, the rest to the right of the graph. Only when the canvas was empty does a full layout run. New nodes are highlighted for 5 s.
+- **Pause updates:** events are queued while paused and applied on resume (or when the run ends).
+- **Aliases (FR-GR-4):** a removed host or router whose address now belongs to a router becomes an alias of that router; a removed subnet contained in a new one becomes its alias. Annotations move to the target (the target keeps its own label; the other label is added to its note) and are recorded in the project's alias table, so API calls with old IDs still resolve. Undo history follows the new IDs.
+- **End of run:** the final graph is published, the user's edits made during the run are kept, the project is saved to `-o`, and the UI stays up until Ctrl-C. `discover --read ... --ui` analyses the file, saves it and then opens it in the UI.
+- The WebSocket handshake is not seen by the HTTP middleware, so the endpoint checks Host, Origin and the session cookie itself. uvicorn needs the `websockets` package for WebSocket support.
+
+### 11.7 Screenshot export
 
 - **PNG:** `cy.png({full, scale, bg})`. Scale 1–4×; background transparent, white or theme.
 - **SVG:** via the SVG exporter (§17).
@@ -768,7 +789,7 @@ Sample pcap sources: the Wireshark SampleCaptures wiki, plus captures generated 
 | **0.1** | File input, decoder and extractors (IPv4, ARP, ICMP, DHCP, DNS), fact store, core inference rules, project save/load, `export`, `info`, golden tests. |
 | **0.2** | Live capture via dumpcap, HostInfo (Linux), `doctor`, coverage report. |
 | **0.3** | UI viewer: open, rename, hide, filters, save, PNG/SVG screenshots with anonymization, undo/redo. |
-| **0.4** | Live attach (`discover --ui`), WebSocket diffs, stable live layout. |
+| **0.4** ✔ | Live attach (`discover --ui`), WebSocket diffs, stable live layout, aliases. |
 | **0.5** | Active and reactive modes with unprivileged probes, scope, rate limits, budget, generation limit, `--dry-run`, audit log. OSPF/RIP/VRRP/HSRP extractors. |
 | **1.0** | Hardening, lab precision/recall baseline, tuned rule weights, documentation, packaging. |
 | **2.x** | IPv6 inference, privileged helper (ARP, SYN, Paris traceroute, IP-ID alias), resume/merge into projects, UI-controlled discovery, pywebview, macOS. |

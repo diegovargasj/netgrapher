@@ -172,3 +172,34 @@ def test_ipv6_host_configuration_is_ignored_until_v2(fake_dumpcap: Path) -> None
 
     project = run_live(source(), LiveOptions(duration_s=0.3, tick_s=0.1), host_config=host)
     assert not any(":" in eid.split(":", 1)[1] for eid in project.graph.entities)
+
+
+def test_on_graph_receives_intermediate_graphs(fake_dumpcap: Path) -> None:
+    graphs = []
+    run_live(
+        source(),
+        LiveOptions(duration_s=0.5, tick_s=0.1),
+        host_config=fake_host,
+        on_graph=graphs.append,
+    )
+    assert graphs and "rtr:192.168.1.1" in graphs[-1].entities
+
+
+def test_cli_live_run_with_ui(fake_dumpcap: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from typer.testing import CliRunner
+
+    from netgrapher import discover
+    from netgrapher.cli import app
+    from netgrapher.project.store import load
+    from netgrapher.server import app as server_app
+
+    monkeypatch.setattr(discover, "read_host_config", fake_host)
+    monkeypatch.setattr(server_app, "wait_for_interrupt", lambda: None)
+    out = fake_dumpcap / "live-ui.ngraph"
+    result = CliRunner().invoke(
+        app, ["discover", "-i", "eth0", "--duration", "0.5", "--ui", "--no-browser", "-o", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "netgrapher UI: http://127.0.0.1:" in result.output
+    assert "The UI is still running" in result.output
+    assert "rtr:192.168.1.1" in load(out).graph.entities

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -23,6 +24,7 @@ from netgrapher.config import (
 )
 from netgrapher.discover import LiveOptions, Status, run_file, run_live
 from netgrapher.export import ExportFormat, export_project
+from netgrapher.graph.model import Graph
 from netgrapher.project.format import Project
 from netgrapher.project.store import ProjectError, load, save
 from netgrapher.report import build_report
@@ -149,7 +151,6 @@ def discover(
 
     not_yet = [
         (mode is not Mode.PASSIVE, f"--mode {mode}", "0.5"),
-        (ui, "--ui", "0.4"),
         (asn_db is not None, "--asn-db", "a later milestone"),
     ]
     for active, what, milestone in not_yet:
@@ -178,12 +179,70 @@ def discover(
             status.done()
             typer.echo(f"cannot read {read}: {exc}", err=True)
             raise typer.Exit(EXIT_RUNTIME) from exc
-    else:
+        status.done()
+        save(project, output)
+        typer.echo(build_report(project))
+        typer.echo(f"\nProject saved to {output}")
+        if ui:
+            ui_command(output, port=port, no_browser=no_browser)
+        return
+    if not ui:
         project = _discover_live(config, options, write, flows, status)
-    status.done()
-    save(project, output)
-    typer.echo(build_report(project))
-    typer.echo(f"\nProject saved to {output}")
+        status.done()
+        save(project, output)
+        typer.echo(build_report(project))
+        typer.echo(f"\nProject saved to {output}")
+        return
+    _discover_live_with_ui(config, options, write, flows, status, output, port, no_browser)
+
+
+def _discover_live_with_ui(
+    config: DiscoveryConfig,
+    options: LiveOptions,
+    write: Path | None,
+    flows: bool,
+    status: _StatusPrinter,
+    output: Path,
+    port: int,
+    no_browser: bool,
+) -> None:
+    """Live capture with the UI following along (FR-UI-16); the UI stays up afterwards."""
+    from netgrapher.server import app as server_app
+    from netgrapher.server.live import LiveSession
+    from netgrapher.server.state import AppState
+
+    state = AppState()
+    session = LiveSession(state)
+    try:
+        running = server_app.start_background(state, port=port, open_browser=not no_browser)
+    except OSError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(EXIT_RUNTIME) from exc
+    typer.echo(f"netgrapher UI: {running.url}", err=True)
+
+    def on_status(st: Status) -> None:
+        status(st)
+        session.publish_status(st)
+
+    try:
+        project = _discover_live(
+            config,
+            options,
+            write,
+            flows,
+            on_status,
+            on_graph=session.publish_graph,
+            message=status.message,
+        )
+        status.done()
+        session.finish(project, output)
+        typer.echo(build_report(state.project))
+        typer.echo(f"\nProject saved to {output}")
+        typer.echo(f"The UI is still running at {running.url}")
+        typer.echo("Press Ctrl-C to exit.")
+        server_app.wait_for_interrupt()
+    finally:
+        running.stop()
 
 
 def _discover_live(
@@ -191,7 +250,10 @@ def _discover_live(
     options: LiveOptions,
     write: Path | None,
     flows: bool,
-    status: _StatusPrinter,
+    status: Callable[[Status], None],
+    *,
+    on_graph: Callable[[Graph], None] | None = None,
+    message: Callable[[str], None] | None = None,
 ) -> Project:
     interfaces = list(config.capture.interfaces)
     if not interfaces:
@@ -219,10 +281,16 @@ def _discover_live(
     typer.echo(f"Capturing passively on {', '.join(interfaces)} {limit_text}.", err=True)
     try:
         return run_live(
-            source, options, record_flows=flows, on_status=status, on_message=status.message
+            source,
+            options,
+            record_flows=flows,
+            on_status=status,
+            on_message=message or getattr(status, "message", None),
+            on_graph=on_graph,
         )
     except LiveCaptureError as exc:
-        status.done()
+        if isinstance(status, _StatusPrinter):
+            status.done()
         typer.echo(str(exc), err=True)
         typer.echo("Run `netgrapher doctor` to check your setup.", err=True)
         raise typer.Exit(EXIT_ENVIRONMENT) from exc

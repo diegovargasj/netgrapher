@@ -4,8 +4,8 @@ import { api, startSession } from "./api.js";
 import { h } from "./dom.js";
 import { screenshot } from "./exporting.js";
 import {
-  TYPES, applyVisibility, buildElements, getFilter, labelOf, parseCidr, runLayout, setFilter,
-  stylesheet, visibleLeaves,
+  TYPES, applyVisibility, buildElements, edgeData, getFilter, labelOf, nodeData, parentOf,
+  parseCidr, placeNewNodes, runLayout, setFilter, stylesheet, visibleLeaves,
 } from "./graph.js";
 import { History } from "./history.js";
 import { renderDetails, renderHiddenList } from "./panels.js";
@@ -117,20 +117,29 @@ const ctx = { state, edit, select, toggleCollapse };
 
 // -- graph ----------------------------------------------------------------------------------
 
-function render({ relayout = false } = {}) {
+function render({ relayout = false, positions = null } = {}) {
+  const viewport = cy && positions ? { zoom: cy.zoom(), pan: cy.pan() } : null;
   if (cy) cy.destroy();
   cy = cytoscape({
     container: $("cy"),
-    elements: buildElements(state),
+    elements: buildElements(state, positions || {}),
     style: stylesheet(),
     boxSelectionEnabled: false,
     selectionType: "single",
   });
   applyVisibility(cy, state);
-  runLayout(cy, state, { relayout });
-  if (!relayout && state.view.zoom && state.view.pan) {
-    cy.zoom(state.view.zoom);
-    cy.pan(state.view.pan);
+  if (positions) {
+    // Resync during a live run: keep what is on screen, place only what is new.
+    const unplaced = cy.nodes().filter((n) => !n.isParent() && !positions[n.id()] && !state.annotations[n.id()]?.position);
+    placeNewNodes(cy, unplaced.map((n) => n.id()));
+    cy.zoom(viewport.zoom);
+    cy.pan(viewport.pan);
+  } else {
+    runLayout(cy, state, { relayout });
+    if (!relayout && state.view.zoom && state.view.pan) {
+      cy.zoom(state.view.zoom);
+      cy.pan(state.view.pan);
+    }
   }
   cy.on("tap", "node, edge", (e) => select(e.target.id()));
   cy.on("tap", (e) => { if (e.target === cy) select(null); });
@@ -144,14 +153,200 @@ function render({ relayout = false } = {}) {
   refresh();
 }
 
-function loadDoc(doc) {
+function loadDoc(doc, { positions = null } = {}) {
   state.doc = doc;
   state.annotations = doc.annotations || {};
   state.view = { layout: "fcose", filters: [], collapsed: [], show_hidden: false, ...(doc.view || {}) };
-  state.selected = null;
-  history.clear();
+  if (!positions) {
+    state.selected = null;
+    history.clear();
+  }
   syncFilterControls();
-  render();
+  render({ positions });
+  showLive(doc.live);
+}
+
+// -- live updates (FR-UI-16) ----------------------------------------------------------------
+
+let socket = null;
+let paused = false;
+let pending = [];
+
+function currentPositions() {
+  return cy ? Object.fromEntries(cy.nodes().map((n) => [n.id(), { ...n.position() }])) : {};
+}
+
+async function resync() {
+  try {
+    loadDoc(await api("GET", "/api/project"), { positions: currentPositions() });
+  } catch (err) {
+    message(`Lost sync with the server: ${err.message}`, true);
+  }
+}
+
+function connectEvents() {
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/events`);
+  socket = ws;
+  ws.addEventListener("message", (m) => onEvent(JSON.parse(m.data)));
+  ws.addEventListener("close", () => {
+    if (socket !== ws) return;
+    setTimeout(() => { connectEvents(); }, 2000);
+  });
+}
+
+function onEvent(ev) {
+  switch (ev.type) {
+    case "hello":
+      if (ev.seq !== state.doc.seq) resync();
+      break;
+    case "graph":
+      if (ev.seq <= state.doc.seq) break; // already in the snapshot
+      if (paused) {
+        pending.push(ev);
+        updatePauseButton();
+      } else if (ev.seq !== state.doc.seq + 1) {
+        resync();
+      } else {
+        applyGraph(ev);
+      }
+      break;
+    case "run_stats":
+      showLive({ ...ev, running: true });
+      break;
+    case "run_ended":
+      paused = false; // the run is over: apply everything that is still queued
+      flushPending();
+      refreshMeta();
+      break;
+    case "annotations":
+      applyRemoteAnnotations(ev.annotations);
+      break;
+    case "resync":
+      resync();
+      break;
+    default:
+      break;
+  }
+}
+
+function applyGraph(ev) {
+  const doc = state.doc;
+  const placedBefore = cy.nodes().filter((n) => !n.isParent()).length;
+  const fresh = [];
+  if (Object.keys(ev.aliases || {}).length) {
+    for (const [oldId, newId] of Object.entries(ev.aliases)) {
+      delete state.annotations[oldId];
+      if (state.selected === oldId) state.selected = newId;
+    }
+    for (const [id, annotation] of Object.entries(ev.annotations || {})) {
+      if (Object.keys(annotation).length) state.annotations[id] = annotation;
+      else delete state.annotations[id];
+    }
+    history.renameIds(ev.aliases);
+    (ev.conflicts || []).forEach((c) => message(c));
+  }
+  cy.batch(() => {
+    for (const id of ev.links_removed) {
+      delete doc.links[id];
+      cy.getElementById(id).remove();
+    }
+    for (const id of ev.removed) {
+      delete doc.entities[id];
+      const node = cy.getElementById(id);
+      node.children().move({ parent: null });
+      node.remove();
+    }
+    const entries = Object.entries(ev.entities)
+      .sort(([, a], [, b]) => Number(b.type === "subnet") - Number(a.type === "subnet"));
+    for (const [id, entity] of entries) doc.entities[id] = entity;
+    for (const [id, entity] of entries) {
+      const parent = parentOf(state, entity);
+      const node = cy.getElementById(id);
+      if (node.empty()) {
+        cy.add({ group: "nodes", data: { ...nodeData(state, id, entity), ...(parent ? { parent } : {}) } });
+        fresh.push(id);
+      } else {
+        node.data(nodeData(state, id, entity));
+        if ((node.parent().nonempty() ? node.parent().id() : null) !== parent) node.move({ parent });
+      }
+    }
+    for (const [id, link] of Object.entries(ev.links)) {
+      if (link.type === "member") continue;
+      doc.links[id] = link;
+      if (!doc.entities[link.a] || !doc.entities[link.b]) continue;
+      const edge = cy.getElementById(id);
+      if (edge.empty()) cy.add({ group: "edges", data: edgeData(state, id, link) });
+      else edge.data(edgeData(state, id, link));
+    }
+  });
+  doc.seq = ev.seq;
+  applyVisibility(cy, state);
+  if (placedBefore === 0 && fresh.length) {
+    runLayout(cy, state, { relayout: true }); // nothing on screen to keep stable yet
+  } else {
+    placeNewNodes(cy, fresh);
+  }
+  const freshNodes = cy.collection(fresh.map((id) => cy.getElementById(id)));
+  freshNodes.addClass("fresh");
+  setTimeout(() => freshNodes.removeClass("fresh"), 5000);
+  refresh();
+}
+
+function applyRemoteAnnotations(changes) {
+  let changed = false;
+  for (const [id, annotation] of Object.entries(changes)) {
+    if (JSON.stringify(state.annotations[id] || {}) === JSON.stringify(annotation)) continue;
+    if (Object.keys(annotation).length) state.annotations[id] = annotation;
+    else delete state.annotations[id];
+    const el = cy.getElementById(id);
+    if (el.nonempty()) el.data("label", labelOf(state, id));
+    changed = true;
+  }
+  if (changed) {
+    setDirty(true);
+    refresh();
+  }
+}
+
+function flushPending() {
+  const events = pending;
+  pending = [];
+  updatePauseButton();
+  for (const ev of events) onEvent(ev);
+}
+
+function updatePauseButton() {
+  $("btn-pause").textContent = paused
+    ? `Resume updates${pending.length ? ` (${pending.length})` : ""}`
+    : "Pause updates";
+}
+
+function clock(seconds) {
+  const s = Math.floor(seconds || 0);
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function showLive(live) {
+  const el = $("st-live");
+  const running = Boolean(live?.running);
+  el.hidden = !live;
+  $("btn-pause").hidden = !running;
+  if (!live) return;
+  el.textContent = running
+    ? `● live ${clock(live.elapsed)} · ${(live.packets || 0).toLocaleString()} packets · ${live.entities ?? 0} entities${live.stopping ? ` · stopping (${live.stopping})` : ""}`
+    : "capture finished";
+}
+
+async function refreshMeta() {
+  try {
+    const doc = await api("GET", "/api/project");
+    for (const key of ["path", "name", "can_save", "dirty", "runs", "live", "seq"]) state.doc[key] = doc[key];
+    showLive(doc.live);
+    updateStatus();
+    message(`Capture finished; saved to ${doc.path}.`);
+  } catch (err) {
+    message(err.message, true);
+  }
 }
 
 // -- filters --------------------------------------------------------------------------------
@@ -354,6 +549,11 @@ function wireToolbar() {
   });
   $("btn-relayout").addEventListener("click", () => render({ relayout: true }));
   $("btn-fit").addEventListener("click", () => cy.fit(cy.elements(":visible"), 30));
+  $("btn-pause").addEventListener("click", () => {
+    paused = !paused;
+    updatePauseButton();
+    if (!paused) flushPending();
+  });
   $("btn-report").addEventListener("click", async () => {
     try {
       $("report-text").textContent = (await api("GET", "/api/report")).text;
@@ -404,7 +604,8 @@ async function main() {
     wireToolbar();
     wireKeys();
     loadDoc(await api("GET", "/api/project"));
-    window.netgrapher = { cy: () => cy, state }; // for debugging and smoke tests
+    connectEvents();
+    window.netgrapher = { cy: () => cy, state, paused: () => paused, pending: () => pending.length };
   } catch (err) {
     message(err.status === 401
       ? "Not authenticated: open the link printed by `netgrapher ui`."

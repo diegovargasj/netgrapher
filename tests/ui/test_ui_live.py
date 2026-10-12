@@ -1,0 +1,130 @@
+"""Browser test of live updates (FR-UI-16): incremental changes, stable positions, highlighting,
+pause/resume, edits during a run, and the end of the run."""
+
+from __future__ import annotations
+
+import socket
+import threading
+import time
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from tests.ui.test_ui_smoke import CHROMIUM, playwright_api
+
+pytestmark = pytest.mark.skipif(CHROMIUM is None, reason="no system Chromium found")
+TOKEN = "live-smoke"
+
+
+@pytest.fixture
+def live(tmp_path: Path) -> Iterator[tuple[str, Any]]:
+    import uvicorn
+
+    from netgrapher.server.app import create_app
+    from netgrapher.server.live import LiveSession
+    from netgrapher.server.state import AppState
+
+    state = AppState()
+    session = LiveSession(state)
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    hosts = {f"127.0.0.1:{port}"}
+    srv = uvicorn.Server(
+        uvicorn.Config(
+            create_app(state, TOKEN, lambda: hosts),
+            host="127.0.0.1",
+            port=port,
+            log_level="warning",
+        )
+    )
+    thread = threading.Thread(target=srv.run, daemon=True)
+    thread.start()
+    while not srv.started:
+        time.sleep(0.02)
+    yield f"http://127.0.0.1:{port}", session
+    srv.should_exit = True
+    thread.join(timeout=5)
+
+
+def leaf_positions(page: Any) -> dict[str, dict[str, float]]:
+    return page.evaluate(
+        "() => Object.fromEntries(window.netgrapher.cy().nodes(':childless')"
+        ".map(n => [n.id(), n.position()]))"
+    )
+
+
+def test_live_updates(live: tuple[str, Any], tmp_path: Path) -> None:
+    from synthetic import LAPTOP, LAPTOP_MAC, eth, graph_from_frames, office_frames, tcp
+
+    from netgrapher.project.format import Project
+    from netgrapher.project.store import load
+
+    url, session = live
+    frames = [f for _, f in office_frames()]
+    newcomer = [
+        eth(LAPTOP_MAC, "02:00:00:00:00:21", tcp(LAPTOP, "192.168.1.33", 40100, 22)),
+        eth("02:00:00:00:00:21", LAPTOP_MAC, tcp("192.168.1.33", LAPTOP, 22, 40100)),
+    ]
+    with playwright_api.sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=CHROMIUM, headless=True)
+        page = browser.new_context(
+            viewport={"width": 1400, "height": 850}, bypass_csp=True
+        ).new_page()
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        page.goto(f"{url}/#token={TOKEN}")
+        page.wait_for_function("window.netgrapher && window.netgrapher.cy().nodes().length === 0")
+        page.wait_for_selector("#st-live:not([hidden])")
+
+        session.publish_graph(graph_from_frames(frames[:8]))
+        page.wait_for_function("window.netgrapher.cy().nodes().length > 0")
+        before = leaf_positions(page)
+
+        session.publish_graph(graph_from_frames(frames))
+        page.wait_for_function("window.netgrapher.cy().nodes().length === 10")
+        after = leaf_positions(page)
+        for node_id, pos in before.items():
+            if node_id in after:
+                assert after[node_id] == pytest.approx(pos, abs=0.01), node_id
+        fresh = page.evaluate("() => window.netgrapher.cy().nodes('.fresh').map(n => n.id())")
+        added = set(after) - set(before)
+        assert added and added <= set(fresh)  # every new node is highlighted
+
+        page.get_by_role("button", name="Pause updates").click()
+        session.publish_graph(graph_from_frames(frames + newcomer))
+        page.wait_for_function("window.netgrapher.pending() === 1")
+        assert page.evaluate("window.netgrapher.cy().nodes().length") == 10
+        page.get_by_role("button", name="Resume updates (1)").click()
+        page.wait_for_function(
+            "window.netgrapher.cy().getElementById('host:192.168.1.33').nonempty()"
+        )
+        assert (
+            page.evaluate(
+                "window.netgrapher.cy().getElementById('host:192.168.1.33').parent().id()"
+            )
+            == "net:192.168.1.0/24"
+        )
+
+        box = page.locator("#cy").bounding_box()
+        pos = page.evaluate(
+            "() => window.netgrapher.cy().getElementById('rtr:192.168.1.1').renderedPosition()"
+        )
+        page.mouse.click(box["x"] + pos["x"], box["y"] + pos["y"])
+        page.locator(".label-edit").fill("Core GW")
+        page.locator(".label-edit").press("Enter")
+        page.wait_for_function(
+            "window.netgrapher.state.annotations['rtr:192.168.1.1']?.label === 'Core GW'"
+        )
+
+        out = tmp_path / "live.ngraph"
+        session.finish(Project(graph=graph_from_frames(frames + newcomer)), out)
+        page.wait_for_function("window.netgrapher.state.doc.can_save === true")
+        assert page.locator("#st-live").inner_text() == "capture finished"
+        assert page.locator("#btn-pause").is_hidden()
+        browser.close()
+    assert load(out).annotations["rtr:192.168.1.1"]["label"] == "Core GW"
+    assert errors == [], errors

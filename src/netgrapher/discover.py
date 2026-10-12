@@ -20,6 +20,7 @@ from netgrapher.capture.source import CaptureStats, FileSource, RawPacket
 from netgrapher.config import Mode
 from netgrapher.facts.store import FactStore
 from netgrapher.flows import FlowTable
+from netgrapher.graph.model import Graph
 from netgrapher.infer.engine import infer
 from netgrapher.pipeline import Ingestor, IngestStats
 from netgrapher.project.format import Project, utc_now
@@ -166,8 +167,12 @@ def run_live(
     host_config: Callable[[], HostConfig] | None = None,
     on_status: StatusCallback | None = None,
     on_message: MessageCallback | None = None,
+    on_graph: Callable[[Graph], None] | None = None,
 ) -> Project:
-    """Passive live capture (milestone 0.2). Probing modes arrive in milestone 0.5."""
+    """Passive live capture. Probing modes arrive in milestone 0.5.
+
+    on_graph receives every intermediate inference result (every tick_s), e.g. for the live UI.
+    """
     store = FactStore()
     flows = FlowTable() if record_flows else None
     ingestor = Ingestor(store, run_id, flows=flows)
@@ -237,7 +242,10 @@ def run_live(
                 drain_deadline = float("inf")
 
             if now >= next_tick:
-                current = set(infer(store).entities)
+                graph = infer(store)
+                if on_graph:
+                    on_graph(graph)
+                current = set(graph.entities)
                 if current - known:
                     last_new = now
                     known |= current

@@ -39,6 +39,15 @@ export class History {
     this.onChange();
   }
 
+  /** Follow entities that were merged into others (aliases) during a live run. */
+  renameIds(aliases) {
+    const rename = (items) => items.forEach((item) => { item.id = aliases[item.id] || item.id; });
+    for (const command of [...this.undoStack, ...this.redoStack]) {
+      rename(command.items);
+      rename(command.inverse);
+    }
+  }
+
   clear() {
     this.undoStack = [];
     this.redoStack = [];

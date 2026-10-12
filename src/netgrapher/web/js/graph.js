@@ -33,30 +33,79 @@ export function labelOf(state, id) {
   return link ? linkDefaultLabel(link) : id;
 }
 
-export function buildElements(state) {
+export function parentOf(state, entity) {
+  return entity.type === "host" && state.doc.entities[entity.subnet_id] ? entity.subnet_id : null;
+}
+
+export function nodeData(state, id, e) {
+  const label = labelOf(state, id);
+  return {
+    id, type: e.type, label, displayLabel: label, conf: e.confidence,
+    kind: e.kind || "", self: e.is_self ? 1 : 0,
+  };
+}
+
+export function edgeData(state, id, l) {
+  const label = labelOf(state, id);
+  return { id, source: l.a, target: l.b, type: l.type, label, displayLabel: label, conf: l.confidence };
+}
+
+/** positions: optional {id: {x, y}} that wins over saved positions (used when resyncing live). */
+export function buildElements(state, positions = {}) {
   const elements = [];
   for (const [id, e] of Object.entries(state.doc.entities)) {
-    const data = {
-      id, type: e.type, label: labelOf(state, id), conf: e.confidence,
-      kind: e.kind || "", self: e.is_self ? 1 : 0,
-    };
-    if (e.type === "host" && state.doc.entities[e.subnet_id]) data.parent = e.subnet_id;
-    data.displayLabel = data.label;
+    const data = nodeData(state, id, e);
+    const parent = parentOf(state, e);
+    if (parent) data.parent = parent;
     const element = { group: "nodes", data };
-    const pos = state.annotations[id]?.position;
+    const pos = positions[id] || state.annotations[id]?.position;
     if (pos) element.position = { x: pos.x, y: pos.y };
     elements.push(element);
   }
   for (const [id, l] of Object.entries(state.doc.links)) {
     if (l.type === "member") continue; // drawn as containment
     if (!state.doc.entities[l.a] || !state.doc.entities[l.b]) continue;
-    elements.push({
-      group: "edges",
-      data: { id, source: l.a, target: l.b, type: l.type, label: labelOf(state, id),
-              displayLabel: labelOf(state, id), conf: l.confidence },
-    });
+    elements.push({ group: "edges", data: edgeData(state, id, l) });
   }
   return elements;
+}
+
+/**
+ * Give new nodes a position next to what they relate to, without moving existing nodes:
+ * hosts beside their siblings, other nodes beside their neighbours, the rest to the right.
+ */
+export function placeNewNodes(cy, newIds) {
+  const pending = new Set(newIds);
+  const isPlaced = (n) => !pending.has(n.id());
+  const jitter = () => (Math.random() - 0.5) * 30;
+  const leavesFirst = cy.collection(newIds.map((id) => cy.getElementById(id)).filter((n) => n.nonempty()))
+    .sort((a, b) => Number(a.isParent()) - Number(b.isParent()));
+  let fallbackRow = 0;
+  leavesFirst.forEach((n) => {
+    if (n.isParent()) {
+      pending.delete(n.id()); // a compound's position follows its children
+      return;
+    }
+    let anchor = null;
+    const siblings = n.parent().nonempty() ? n.siblings().filter(isPlaced) : cy.collection();
+    if (siblings.nonempty()) {
+      const bb = siblings.boundingBox();
+      anchor = { x: bb.x2 + 25, y: (bb.y1 + bb.y2) / 2 };
+    } else {
+      const around = (n.parent().nonempty() ? n.parent() : n).neighborhood("node").filter(isPlaced);
+      if (around.nonempty()) {
+        const bb = around.boundingBox();
+        anchor = { x: (bb.x1 + bb.x2) / 2 + 90, y: (bb.y1 + bb.y2) / 2 + 40 };
+      }
+    }
+    if (!anchor) {
+      const placed = cy.nodes().filter((m) => isPlaced(m) && !m.isParent());
+      const bb = placed.nonempty() ? placed.boundingBox() : { x2: 0, y1: 0 };
+      anchor = { x: bb.x2 + 100, y: bb.y1 + 60 * fallbackRow++ };
+    }
+    n.position({ x: anchor.x + jitter(), y: anchor.y + jitter() });
+    pending.delete(n.id());
+  });
 }
 
 function cssVar(name) {
@@ -105,6 +154,7 @@ export function stylesheet() {
     { selector: 'edge[type = "uplink"]', style: { width: 2.5 } },
     { selector: ".ghost", style: { opacity: 0.18 } },
     { selector: ".gone", style: { display: "none" } },
+    { selector: ".fresh", style: { "overlay-color": c("--node-self"), "overlay-opacity": 0.45, "overlay-padding": 7 } },
     { selector: ".match", style: { "overlay-color": c("--match"), "overlay-opacity": 0.35, "overlay-padding": 4 } },
     { selector: ":selected", style: { "overlay-color": c("--accent"), "overlay-opacity": 0.25, "overlay-padding": 5 } },
   ];
