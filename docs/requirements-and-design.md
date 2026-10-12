@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v0.2 (milestone 0.1 implemented) |
+| **Status** | Draft v0.3 (milestones 0.1 and 0.2 implemented) |
 | **Date** | 2026-10-11 |
 | **Author** | diegovargasj |
 
@@ -264,8 +264,8 @@ v2: a small privileged helper (netgrapher-helper) receives probe requests from t
 
 ### 5.3 Concurrency
 
-- The engine runs on an **asyncio** event loop.
-- Reading and decoding packets happens in a **dedicated thread**, which pushes facts onto a bounded queue (dpkt is synchronous and CPU-bound).
+- *As implemented in 0.2:* a **reader thread** frames packets from dumpcap's pipe into a bounded queue (100,000 packets). The **main thread** decodes, extracts and runs inference every 2 s, and checks stop conditions, so the fact store has a single writer and needs no locks. Inference holds up ingestion while it runs; the queue and dumpcap's buffer absorb that. Incremental inference is a later optimization.
+- *Planned:* the engine moves to an **asyncio** event loop when the prober and API server arrive (0.4/0.5).
 - The prober, planner, inference ticker and API server (uvicorn) are asyncio tasks.
 - The fact store is written from one consumer task only, so it needs no locks. Inference works on a consistent snapshot between ingestion batches.
 - Multiprocessing is deferred. If profiling shows decoding is the bottleneck, decoding can be split across processes per capture file or interface.
@@ -376,8 +376,10 @@ This is simple, monotonic and explainable. Contradicting evidence (for example a
 | R-ALIAS-PTR | Reverse-DNS names share a device pattern (probe modes only) | Merge routers (weak) | 0.30 |
 | R-HOP-TTL | Received TTL vs. inferred initial TTL (64/128/255) | `hop_distance`; an `inferred-path` link when > 0 | 0.60 |
 | R-PATH-GW | A router MAC forwards traffic for members of a remote subnet or for external addresses | `inferred-path` (remote subnet) or `uplink` (Internet) link from that router | 0.80 |
+| R-PATH-ROUTE | Route with a gateway in the capture host's routing table | `inferred-path` from the gateway to the routed prefix (`uplink` for the default route) | 1.00 |
 | R-PATH-TRACE | A complete or partial traceroute | `interface` links along the path; `unk:` nodes for silent hops | 0.90 |
 | R-EXT | Public IP (not RFC1918/CGNAT/link-local/multicast) | Member of `ext:internet` or `ext:as<n>` | 1.00 |
+| R-HOST-SELF | Address configured on the capture host | Host with `is_self` | 1.00 |
 | R-HOST-OBS | The address sent traffic (or an ARP binding) | Host | 1.00 |
 | R-HOST-REF | The address was only a destination or referenced (e.g. DHCP option) | Host (ARP query targets alone never create hosts) | 0.50 |
 | R-NAME-* | DNS answers, DHCP option 12, mDNS, LLMNR, NBNS, PTR | `names[]` with source (attributes, no separate evidence in 0.1) | — |
@@ -472,7 +474,9 @@ dumpcap -q -i <if1> [-i <if2> ...] -s 512 -B 64 [-p] [-f "<bpf>"] -w -
 ```
 
 - Writes pcapng to stdout (`-w -`). The engine reads it as a stream and optionally tees the raw bytes to the `-w` file.
-- Drop statistics come from pcapng Interface Statistics Blocks, plus a final stats query when the run ends.
+- Drop statistics come from the pcapng Interface Statistics Blocks dumpcap writes when it stops.
+- dumpcap runs in its own session (`start_new_session`), so Ctrl-C reaches only netgrapher, which then sends dumpcap SIGINT and drains the remaining packets (5 s timeout, then kill).
+- `NETGRAPHER_DUMPCAP` overrides the dumpcap path (used by the tests' fake dumpcap; also useful for non-standard installs).
 - netgrapher has its own forward-only pcap/pcapng reader (`capture/source.py`): dpkt's pcapng reader handles one interface only, ignores Interface Statistics Blocks and needs a seekable file.
 - **Privileges:** `dumpcap` with `cap_net_raw,cap_net_admin=eip`. On Debian/Kali: `sudo dpkg-reconfigure wireshark-common` (allow non-superusers), then `sudo usermod -aG wireshark $USER`. `netgrapher doctor` checks this.
 
@@ -481,6 +485,8 @@ dumpcap -q -i <if1> [-i <if2> ...] -s 512 -B 64 [-p] [-f "<bpf>"] -w -
 - `ip -j addr`, `ip -j route show table all`, `ip -j neigh` (JSON output, no extra dependency). Falls back to `/proc/net/*`.
 - `/etc/resolv.conf` (and `resolvectl` when available) for DNS servers.
 - Taken once at start and once at the end of a run. Differences are recorded as facts.
+- Neighbor-cache entries become `ARP_BINDING` facts with `hostcfg` provenance, so they count as on-link evidence like observed ARP.
+- `/32` interface addresses (e.g. VPN point-to-point) do not create subnets.
 
 ---
 

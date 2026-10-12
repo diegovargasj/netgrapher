@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -86,3 +87,24 @@ class DiscoveryConfig:
                     f"{cidr} is larger than /{MAX_ACTIVE_PREFIXLEN_V4}; "
                     "pass --force-large to allow it"
                 )
+
+
+_DURATION = re.compile(r"(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?")
+
+
+def parse_duration(text: str) -> float:
+    """Seconds from "90", "45s", "30m", "1h30m". Raises ValueError."""
+    text = text.strip().lower()
+    try:
+        value = float(text)
+    except ValueError:
+        match = _DURATION.fullmatch(text)
+        if not text or match is None or not any(match.groups()):
+            raise ValueError(
+                f"invalid duration: {text!r} (examples: 90, 45s, 30m, 1h30m)"
+            ) from None
+        h, m, s = (float(g) if g else 0.0 for g in match.groups())
+        value = h * 3600 + m * 60 + s
+    if value <= 0:
+        raise ValueError(f"duration must be positive: {text!r}")
+    return value

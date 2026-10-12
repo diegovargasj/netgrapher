@@ -12,7 +12,7 @@ import struct
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Protocol
 
 PCAP_MAGIC_US = 0xA1B2C3D4
 PCAP_MAGIC_NS = 0xA1B23C4D
@@ -34,6 +34,10 @@ _ISB_IFDROP = 5
 _ISB_OSDROP = 7
 
 _MAX_BLOCK = 64 * 1024 * 1024
+
+
+class Readable(Protocol):
+    def read(self, n: int = -1, /) -> bytes: ...
 
 
 class CaptureFormatError(Exception):
@@ -68,7 +72,7 @@ class CaptureStats:
     os_dropped: dict[int, int] = field(default_factory=dict)
 
 
-def _read_exact(stream: BinaryIO, n: int) -> bytes | None:
+def _read_exact(stream: Readable, n: int) -> bytes | None:
     """Read exactly n bytes; None on clean EOF; raises EOFError on a partial read."""
     buf = stream.read(n)
     if not buf:
@@ -84,7 +88,7 @@ def _read_exact(stream: BinaryIO, n: int) -> bytes | None:
 class CaptureReader:
     """Reads classic pcap or pcapng from a forward-only binary stream."""
 
-    def __init__(self, stream: BinaryIO) -> None:
+    def __init__(self, stream: Readable) -> None:
         self._stream = stream
         self.interfaces: list[InterfaceInfo] = []
         self.stats = CaptureStats()
@@ -266,11 +270,20 @@ class FileSource:
     def __init__(self, path: Path) -> None:
         self.path = path
         self._reader: CaptureReader | None = None
+        self._stream: BinaryIO | None = None
 
     def __iter__(self) -> Iterator[RawPacket]:
         with self.path.open("rb") as stream:
+            self._stream = stream
             self._reader = CaptureReader(stream)
             yield from self._reader
+
+    def progress(self) -> float | None:
+        """Fraction of the file read so far, if known."""
+        if self._stream is None or self._stream.closed:
+            return None
+        size = self.path.stat().st_size
+        return self._stream.tell() / size if size else None
 
     @property
     def stats(self) -> CaptureStats:

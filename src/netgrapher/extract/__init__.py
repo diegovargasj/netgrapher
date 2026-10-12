@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 
 from netgrapher.decode.packet import DecodedPacket
-from netgrapher.extract import arp, dhcp, dns, icmp, ipv4, routing
+from netgrapher.extract import arp, dhcp, dns, icmp, ipv4, nbns, routing
 from netgrapher.facts.model import Observation
 
 Extractor = Callable[[DecodedPacket], Iterable[Observation]]
@@ -20,6 +20,7 @@ EXTRACTORS: tuple[tuple[str, Extractor], ...] = (
     ("icmp", icmp.extract),
     ("dhcp", dhcp.extract),
     ("dns", dns.extract),
+    ("nbns", nbns.extract),
     ("ospf", routing.extract_ospf),
     ("eigrp", routing.extract_eigrp),
     ("rip", routing.extract_rip),

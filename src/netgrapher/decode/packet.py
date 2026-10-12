@@ -44,3 +44,7 @@ class DecodedPacket:
     tcp_flags: int | None = None
     icmp: IcmpInfo | None = None
     payload: bytes = b""  # UDP/TCP payload, or the IP payload for other protocols
+    # Tunnelled traffic (GRE, IP-in-IP): the inner packet, without L2 addresses.
+    inner: DecodedPacket | None = None
+    tunneled: bool = False  # this packet is the inner packet of a tunnel
+    tunnel_depth: int = 0

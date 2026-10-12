@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -9,6 +10,8 @@ from typing import Annotated, NoReturn
 import typer
 
 from netgrapher import __version__
+from netgrapher.capture.hostinfo import read_host_config
+from netgrapher.capture.live import LiveCaptureError, LiveSource
 from netgrapher.capture.source import CaptureFormatError
 from netgrapher.config import (
     CaptureConfig,
@@ -16,7 +19,9 @@ from netgrapher.config import (
     Mode,
     ProbeConfig,
     ScopeConfig,
+    parse_duration,
 )
+from netgrapher.discover import LiveOptions, Status, run_file, run_live
 from netgrapher.export import ExportFormat, export_project
 from netgrapher.project.format import Project
 from netgrapher.project.store import ProjectError, load, save
@@ -147,21 +152,123 @@ def discover(
         typer.echo(str(exc), err=True)
         raise typer.Exit(EXIT_USAGE) from exc
 
-    if read is None:
-        typer.echo("live capture is not implemented yet (milestone 0.2); use --read", err=True)
-        raise typer.Exit(EXIT_RUNTIME)
-
-    from netgrapher.discover import run_file
+    not_yet = [
+        (mode is not Mode.PASSIVE, f"--mode {mode}", "0.5"),
+        (ui, "--ui", "0.4"),
+        (asn_db is not None, "--asn-db", "a later milestone"),
+    ]
+    for active, what, milestone in not_yet:
+        if active:
+            typer.echo(f"{what} is not implemented yet (milestone {milestone})", err=True)
+            raise typer.Exit(EXIT_RUNTIME)
+    if read is not None and (duration or packets or until_converged or write or interface):
+        typer.echo("--duration/--packets/--until-converged/-w/-i apply to live capture", err=True)
+        raise typer.Exit(EXIT_USAGE)
+    try:
+        options = LiveOptions(
+            duration_s=parse_duration(duration) if duration else None,
+            packets=packets,
+            until_converged_s=parse_duration(until_converged) if until_converged else None,
+        )
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(EXIT_USAGE) from exc
 
     output = output or Path(f"netgrapher-{datetime.now():%Y%m%d-%H%M%S}.ngraph")
-    try:
-        project = run_file(read, record_flows=flows)
-    except (OSError, CaptureFormatError) as exc:
-        typer.echo(f"cannot read {read}: {exc}", err=True)
-        raise typer.Exit(EXIT_RUNTIME) from exc
+    status = _StatusPrinter()
+    if read is not None:
+        try:
+            project = run_file(read, record_flows=flows, on_status=status)
+        except (OSError, CaptureFormatError) as exc:
+            status.done()
+            typer.echo(f"cannot read {read}: {exc}", err=True)
+            raise typer.Exit(EXIT_RUNTIME) from exc
+    else:
+        project = _discover_live(config, options, write, flows, status)
+    status.done()
     save(project, output)
     typer.echo(build_report(project))
     typer.echo(f"\nProject saved to {output}")
+
+
+def _discover_live(
+    config: DiscoveryConfig,
+    options: LiveOptions,
+    write: Path | None,
+    flows: bool,
+    status: _StatusPrinter,
+) -> Project:
+    interfaces = list(config.capture.interfaces)
+    if not interfaces:
+        default = read_host_config().default_interface()
+        if default is None:
+            typer.echo("no default route; choose an interface with -i", err=True)
+            raise typer.Exit(EXIT_USAGE)
+        interfaces = [default]
+    source = LiveSource(
+        interfaces,
+        snaplen=config.capture.snaplen,
+        buffer_mib=config.capture.buffer_mib,
+        promiscuous=config.capture.promiscuous,
+        bpf_filter=config.capture.bpf_filter,
+        write_path=write,
+    )
+    limits = [
+        f"for {options.duration_s:g}s" if options.duration_s else "",
+        f"up to {options.packets} packets" if options.packets else "",
+        f"until nothing new for {options.until_converged_s:g}s"
+        if options.until_converged_s
+        else "",
+    ]
+    limit_text = ", ".join(x for x in limits if x) or "until Ctrl-C"
+    typer.echo(f"Capturing passively on {', '.join(interfaces)} {limit_text}.", err=True)
+    try:
+        return run_live(
+            source, options, record_flows=flows, on_status=status, on_message=status.message
+        )
+    except LiveCaptureError as exc:
+        status.done()
+        typer.echo(str(exc), err=True)
+        typer.echo("Run `netgrapher doctor` to check your setup.", err=True)
+        raise typer.Exit(EXIT_ENVIRONMENT) from exc
+
+
+class _StatusPrinter:
+    """Progress on stderr: one updating line on a terminal, occasional lines otherwise."""
+
+    def __init__(self) -> None:
+        self._tty = sys.stderr.isatty()
+        self._last_plain = 0.0
+        self._dirty = False
+
+    def __call__(self, st: Status) -> None:
+        parts = [
+            f"{int(st.elapsed) // 60:02d}:{int(st.elapsed) % 60:02d}",
+            f"{st.packets:,} packets",
+        ]
+        if st.fraction is not None:
+            parts.append(f"{st.fraction:.0%} of file")
+        if st.entities is not None:
+            parts.append(f"{st.entities} entities")
+        if st.stopping:
+            parts.append(f"stopping ({st.stopping})")
+        line = " · ".join(parts)
+        if self._tty:
+            sys.stderr.write("\r\033[K" + line)
+            sys.stderr.flush()
+            self._dirty = True
+        elif st.elapsed - self._last_plain >= 10:
+            print(line, file=sys.stderr)
+            self._last_plain = st.elapsed
+
+    def message(self, text: str) -> None:
+        self.done()
+        print(text, file=sys.stderr)
+
+    def done(self) -> None:
+        if self._dirty:
+            sys.stderr.write("\n")
+            self._dirty = False
 
 
 @app.command("ui")
@@ -198,4 +305,12 @@ def info(project: Annotated[Path, typer.Argument(help="Project file (.ngraph).")
 @app.command()
 def doctor() -> None:
     """Check the environment (dumpcap, capabilities, ping sockets, interfaces)."""
-    _not_implemented("doctor")
+    from netgrapher.doctor import Level, run_checks
+
+    checks = run_checks()
+    for check in checks:
+        typer.echo(f"[{check.level}] {check.message}")
+        if check.fix and check.level is not Level.OK:
+            typer.echo(f"       fix: {check.fix}")
+    if any(c.level is Level.FAIL for c in checks):
+        raise typer.Exit(EXIT_ENVIRONMENT)

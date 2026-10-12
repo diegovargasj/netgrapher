@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from netgrapher.facts.model import Fact
-from netgrapher.graph.ids import link_id
+from netgrapher.facts.model import Fact, FactKind
+from netgrapher.graph.ids import link_id, subnet_id
 from netgrapher.graph.model import Link, LinkType
 from netgrapher.infer.confidence import noisy_or
 from netgrapher.infer.context import Context
@@ -23,7 +23,33 @@ def _gateways(ctx: Context, ips: list[str]) -> dict[str, list[Fact]]:
     return found
 
 
+def _route_paths(ctx: Context) -> None:
+    """Routes with a gateway in the capture host's routing table (R-PATH-ROUTE)."""
+    for route in ctx.store.by_kind(FactKind.HOST_ROUTE):
+        rid = ctx.router_of_ip.get(route.get("gateway") or "")
+        if rid is None:
+            continue
+        if route.subject == "default":
+            if EXTERNAL_ID not in ctx.graph.entities:
+                continue
+            target, link_type = EXTERNAL_ID, LinkType.UPLINK
+        else:
+            target, link_type = subnet_id(route.subject), LinkType.INFERRED_PATH
+            if target not in ctx.subnets or ctx.subnets[target].kind != "remote":
+                continue
+        ev = ctx.evidence(
+            "R-PATH-ROUTE", f"{rid}>{target}", [route], f"Host route {route.subject} via {rid}"
+        )
+        attrs: dict[str, object] = {}
+        if link_type is LinkType.INFERRED_PATH:
+            attrs = {"hops": None, "basis": ["route"]}
+        ctx.add_or_merge_link(
+            Link(link_id(link_type, rid, target), link_type, rid, target, 1.0, attrs, [ev])
+        )
+
+
 def build(ctx: Context) -> None:
+    _route_paths(ctx)
     members: defaultdict[str, list[str]] = defaultdict(list)
     for ip, sid in ctx.subnet_of.items():
         members[sid].append(ip)
@@ -54,7 +80,7 @@ def build(ctx: Context) -> None:
                     )
                 )
                 basis.append("ttl")
-            ctx.graph.add_link(
+            ctx.add_or_merge_link(
                 Link(
                     link_id(LinkType.INFERRED_PATH, rid, sid),
                     LinkType.INFERRED_PATH,
@@ -71,7 +97,7 @@ def build(ctx: Context) -> None:
             ev = ctx.evidence(
                 "R-PATH-GW", f"{rid}>{EXTERNAL_ID}", facts, f"{rid} forwards Internet traffic"
             )
-            ctx.graph.add_link(
+            ctx.add_or_merge_link(
                 Link(
                     link_id(LinkType.UPLINK, rid, EXTERNAL_ID),
                     LinkType.UPLINK,

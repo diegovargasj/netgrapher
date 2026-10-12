@@ -2,7 +2,7 @@
 
 **Builds a map of the routers, subnets and hosts on a network from the traffic it sees, and lets you explore and edit that map interactively.**
 
-> **Status: early development (milestone 0.1).** Offline analysis of pcap/pcapng files (`discover --read`), `info` and `export` work today. Live capture, the UI and the active/reactive modes are still *planned*. See [docs/requirements-and-design.md](docs/requirements-and-design.md) for the full specification.
+> **Status: early development (milestone 0.2).** Passive discovery works today, both live (`discover`, via dumpcap) and from pcap/pcapng files (`discover --read`), along with `info`, `export` and `doctor`. The UI and the active/reactive modes are still *planned*. See [docs/requirements-and-design.md](docs/requirements-and-design.md) for the full specification.
 
 ---
 
@@ -60,12 +60,14 @@ Safety measures in the scanning modes: rate limits, a probe budget, a generation
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e .
-.venv/bin/netgrapher discover --read capture.pcapng -o net.ngraph   # prints the coverage report
+.venv/bin/netgrapher doctor                                          # check dumpcap permissions
+.venv/bin/netgrapher discover --duration 10m -w run.pcapng -o net.ngraph   # live, passive
+.venv/bin/netgrapher discover --read capture.pcapng -o net.ngraph   # or from a file
 .venv/bin/netgrapher info net.ngraph
 .venv/bin/netgrapher export net.ngraph --format dot -o net.dot && dot -Tsvg net.dot -o net.svg
 ```
 
-Development: `pip install -e . pytest hypothesis mypy ruff`, then `pytest`, `mypy` and `ruff check .`.
+Live capture stops on `--duration`, `--packets`, `--until-converged` or Ctrl-C (press twice to force). Development: `pip install -e . pytest hypothesis mypy ruff`, then `pytest`, `mypy` and `ruff check .`. The tests never capture real traffic: they use a fake dumpcap.
 
 ## Installation (planned)
 

@@ -22,6 +22,10 @@ class Provenance(StrEnum):
 
 
 class FactKind(StrEnum):
+    # Capture-host configuration (provenance hostcfg); neighbors become ARP_BINDING facts
+    HOST_ADDRESS = "host_address"  # data: prefixlen, iface, mac
+    HOST_ROUTE = "host_route"  # subject: "default" or prefix; data: gateway, iface
+    HOST_RESOLVER = "host_resolver"
     # Seen in IPv4 headers
     IP_SEEN = "ip_seen"  # data: dir ("src" | "dst")
     IP_MAC = "ip_mac"  # data: mac, vlan, dir

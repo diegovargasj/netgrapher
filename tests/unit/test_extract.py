@@ -151,3 +151,35 @@ def test_vrrp_and_hsrp_virtual_addresses() -> None:
             FactKind.REDUNDANCY_SPEAKER, "10.0.0.3", proto="hsrp", group=5, vips=("10.0.0.253",)
         )
     ]
+
+
+def test_nbns_registration_and_group_names() -> None:
+    import dpkt
+
+    from netgrapher.extract import nbns
+
+    def nb_rr(name: str, suffix: int, flags: int, ip: str) -> dpkt.netbios.NS.RR:
+        encoded = dpkt.netbios.encode_name(name.ljust(15) + chr(suffix))
+        return dpkt.netbios.NS.RR(
+            name=encoded,
+            type=dpkt.netbios.NS_NB,
+            cls=1,
+            ttl=300,
+            rdata=struct.pack("!H", flags) + ip4(ip),
+        )
+
+    msg = dpkt.netbios.NS(
+        id=1,
+        op=0x2910,
+        qd=[],
+        an=[],
+        ar=[
+            nb_rr("DESKTOP-42", 0x00, 0, "10.0.0.42"),
+            nb_rr("WORKGROUP", 0x00, 0x8000, "10.0.0.42"),
+            nb_rr("DESKTOP-42", 0x03, 0, "10.0.0.42"),
+        ],
+    )
+    frame = eth(A, BROADCAST, udp("10.0.0.42", "10.0.0.255", 137, 137, bytes(msg)))
+    assert list(nbns.extract(dec(frame))) == [
+        observe(FactKind.NAME, "10.0.0.42", name="desktop-42", source="nbns")
+    ]

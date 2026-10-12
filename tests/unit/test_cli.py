@@ -52,9 +52,19 @@ def test_discover_read_info_and_export(tmp_path: Path) -> None:
     assert any(n["id"] == "rtr:192.168.1.1" for n in json.loads(out.read_text())["nodes"])
 
 
-def test_live_capture_not_yet_available() -> None:
-    result = runner.invoke(app, ["discover"])
-    assert result.exit_code == 1
+def test_probing_modes_and_ui_not_yet_available() -> None:
+    assert runner.invoke(app, ["discover", "--mode", "reactive"]).exit_code == 1
+    assert runner.invoke(app, ["discover", "--read", "x.pcap", "--ui"]).exit_code == 1
+
+
+def test_live_options_rejected_for_files() -> None:
+    result = runner.invoke(app, ["discover", "--read", "x.pcap", "--duration", "5m"])
+    assert result.exit_code == EXIT_USAGE
+
+
+def test_invalid_duration() -> None:
+    result = runner.invoke(app, ["discover", "-i", "eth0", "--duration", "soon"])
+    assert result.exit_code == EXIT_USAGE
 
 
 def test_bad_inputs(tmp_path: Path) -> None:

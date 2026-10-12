@@ -16,7 +16,22 @@ def build_report(project: Project) -> str:
 
     for run in project.runs:
         stats = run.get("stats", {})
-        lines.append(f"Run {run['id']}: {run['mode']} from {run['source']} ({run.get('input')})")
+        where = run.get("input") or ", ".join(i["name"] or "?" for i in run.get("interfaces", []))
+        lines.append(
+            f"Run {run['id']}: {run['mode']} from {run['source']} ({where}), "
+            f"stopped: {run.get('stop_reason')}"
+        )
+        hostcfg = (run.get("hostcfg") or {}).get("start")
+        if hostcfg:
+            addrs = [
+                f"{a['ip']}/{a['prefixlen']}"
+                for i in hostcfg["interfaces"]
+                if not i["loopback"]
+                for a in i["addresses"]
+                if ":" not in a["ip"]
+            ]
+            lines.append(f"  capture host {hostcfg['hostname']}: {', '.join(addrs) or 'no IPv4'}")
+            lines.extend(f"  warning: {w}" for w in hostcfg.get("warnings", []))
         lines.append(
             f"  packets {stats.get('packets', 0)}, IPv4 {stats.get('ipv4', 0)}, "
             f"malformed {stats.get('malformed', 0)}, "

@@ -45,8 +45,13 @@ ETH_IPV6 = 0x86DD
 _ETH_VLAN = (0x8100, 0x88A8, 0x9100)
 
 PROTO_ICMP = 1
+PROTO_IPIP = 4
 PROTO_TCP = 6
 PROTO_UDP = 17
+PROTO_GRE = 47
+
+_GRE_TEB = 0x6558  # transparent Ethernet bridging
+_MAX_TUNNEL_DEPTH = 2
 
 _ICMP_ERRORS = (3, 5, 11, 12)
 
@@ -181,6 +186,37 @@ def _decode_ipv4(pkt: DecodedPacket, buf: bytes) -> None:
             pkt.icmp = _decode_icmp(payload)
     else:
         pkt.payload = payload
+        if proto in (PROTO_IPIP, PROTO_GRE) and pkt.tunnel_depth < _MAX_TUNNEL_DEPTH:
+            _decode_tunnel(pkt, proto, payload)
+
+
+def _decode_tunnel(pkt: DecodedPacket, proto: int, payload: bytes) -> None:
+    """Decode the inner packet; malformed inner data is ignored, the outer packet stays valid."""
+    inner = DecodedPacket(
+        frame=pkt.frame,
+        ts=pkt.ts,
+        iface=pkt.iface,
+        vlan=pkt.vlan,
+        tunneled=True,
+        tunnel_depth=pkt.tunnel_depth + 1,
+    )
+    try:
+        if proto == PROTO_IPIP:
+            _decode_ipv4(inner, payload)
+        else:
+            if len(payload) < 4:
+                return
+            flags, ethertype = struct.unpack_from("!HH", payload)
+            offset = 4 + 4 * sum(1 for bit in (0x8000, 0x2000, 0x1000) if flags & bit)
+            if ethertype == _GRE_TEB:
+                _decode_ethernet(inner, payload[offset:])
+                inner.src_mac = inner.dst_mac = None  # remote L2 addresses: not evidence here
+            else:
+                _decode_ethertype(inner, ethertype, payload[offset:])
+    except DecodeError:
+        return
+    if inner.ip_src is not None or inner.arp is not None or inner.is_ipv6:
+        pkt.inner = inner
 
 
 def _decode_icmp(buf: bytes) -> IcmpInfo:

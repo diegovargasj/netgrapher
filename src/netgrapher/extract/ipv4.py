@@ -19,7 +19,8 @@ def extract(pkt: DecodedPacket) -> Iterator[Observation]:
         if pkt.src_mac is not None and not is_group_mac(pkt.src_mac):
             yield observe(FactKind.IP_MAC, src, mac=pkt.src_mac, vlan=pkt.vlan, dir="src")
         # TTLs of multicast/broadcast packets are often protocol-specific (1, 255): skip them.
-        if not dst_is_group and is_usable_unicast(dst):
+        # Inner tunnel packets: their TTL says nothing about distance from the capture point.
+        if not dst_is_group and is_usable_unicast(dst) and not pkt.tunneled:
             yield observe(FactKind.TTL_OBSERVED, src, ttl=pkt.ttl)
     if not dst_is_group and is_usable_unicast(dst):
         yield observe(FactKind.IP_SEEN, dst, dir="dst")

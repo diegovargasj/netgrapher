@@ -106,29 +106,38 @@ def write_pcap(path: Path, frames: list[tuple[float, bytes]], linktype: int = 1)
             writer.writepkt(frame, ts=ts)
 
 
+def _block(btype: int, body: bytes) -> bytes:
+    body += b"\x00" * (-len(body) % 4)
+    length = len(body) + 12
+    return struct.pack("<II", btype, length) + body + struct.pack("<I", length)
+
+
+def pcapng_head(interfaces: list[int], packets: list[tuple[int, float, bytes]]) -> bytes:
+    """Little-endian pcapng section header, interface blocks and enhanced packet blocks."""
+    out = _block(0x0A0D0D0A, struct.pack("<IHHq", 0x1A2B3C4D, 1, 0, -1))
+    for linktype in interfaces:
+        out += _block(1, struct.pack("<HHI", linktype, 0, 65535))
+    for iface, ts, data in packets:
+        units = int(ts * 1_000_000)
+        epb = struct.pack("<IIIII", iface, units >> 32, units & 0xFFFFFFFF, len(data), len(data))
+        out += _block(6, epb + data)
+    return out
+
+
+def pcapng_isb(drops: dict[int, int]) -> bytes:
+    out = b""
+    for iface, count in drops.items():
+        opt = struct.pack("<HHQ", 5, 8, count) + struct.pack("<HH", 0, 0)
+        out += _block(5, struct.pack("<III", iface, 0, 0) + opt)
+    return out
+
+
 def pcapng_bytes(
     interfaces: list[int],
     packets: list[tuple[int, float, bytes]],
     drops: dict[int, int] | None = None,
 ) -> bytes:
-    """Minimal little-endian pcapng: one SHB, IDBs, EPBs and optional ISBs."""
-
-    def block(btype: int, body: bytes) -> bytes:
-        body += b"\x00" * (-len(body) % 4)
-        length = len(body) + 12
-        return struct.pack("<II", btype, length) + body + struct.pack("<I", length)
-
-    out = block(0x0A0D0D0A, struct.pack("<IHHq", 0x1A2B3C4D, 1, 0, -1))
-    for linktype in interfaces:
-        out += block(1, struct.pack("<HHI", linktype, 0, 65535))
-    for iface, ts, data in packets:
-        units = int(ts * 1_000_000)
-        epb = struct.pack("<IIIII", iface, units >> 32, units & 0xFFFFFFFF, len(data), len(data))
-        out += block(6, epb + data + b"\x00" * (-len(data) % 4))
-    for iface, count in (drops or {}).items():
-        opt = struct.pack("<HHQ", 5, 8, count) + struct.pack("<HH", 0, 0)
-        out += block(5, struct.pack("<III", iface, 0, 0) + opt)
-    return out
+    return pcapng_head(interfaces, packets) + pcapng_isb(drops or {})
 
 
 # --- Scenario: a small office LAN -------------------------------------------------------------

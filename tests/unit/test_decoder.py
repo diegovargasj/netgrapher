@@ -73,3 +73,33 @@ def test_non_first_fragment_has_no_ports() -> None:
     data = header + ip4("10.0.0.1") + ip4("10.0.0.2") + b"\x00" * 8
     p = decode(raw(data, 101))
     assert p.sport is None
+
+
+def test_ip_in_ip_and_gre_inner_packets() -> None:
+    from synthetic import ipv4
+
+    inner = tcp("172.16.0.5", "172.16.1.9", 1, 2, ttl=60)
+    ipip = decode(raw(bytes(ipv4("10.0.0.1", "10.0.0.2", bytes(inner), 4)), 101))
+    assert ipip.inner is not None and ipip.inner.tunneled
+    assert (ipip.inner.ip_src, ipip.inner.sport) == ("172.16.0.5", 1)
+    gre = struct.pack("!HHI", 0x2000, 0x0800, 42) + bytes(inner)  # with a key field
+    pkt = decode(raw(bytes(ipv4("10.0.0.1", "10.0.0.2", gre, 47)), 101))
+    assert pkt.inner is not None and pkt.inner.ip_dst == "172.16.1.9"
+    teb = struct.pack("!HH", 0, 0x6558) + eth("02:00:00:00:00:01", "02:00:00:00:00:02", inner)
+    pkt = decode(raw(bytes(ipv4("10.0.0.1", "10.0.0.2", teb, 47)), 101))
+    assert pkt.inner is not None and pkt.inner.src_mac is None and pkt.inner.ip_src == "172.16.0.5"
+    broken = decode(raw(bytes(ipv4("10.0.0.1", "10.0.0.2", b"\x45\x00", 4)), 101))
+    assert broken.inner is None and broken.ip_src == "10.0.0.1"
+
+
+def test_tunneled_packets_give_no_ttl_facts() -> None:
+    from synthetic import ipv4
+
+    from netgrapher.extract import ipv4 as ipv4_extract
+    from netgrapher.facts.model import FactKind
+
+    inner = tcp("172.16.0.5", "172.16.1.9", 1, 2, ttl=60)
+    pkt = decode(raw(bytes(ipv4("10.0.0.1", "10.0.0.2", bytes(inner), 4)), 101))
+    assert pkt.inner is not None
+    kinds = {o.kind for o in ipv4_extract.extract(pkt.inner)}
+    assert FactKind.TTL_OBSERVED not in kinds and FactKind.IP_SEEN in kinds

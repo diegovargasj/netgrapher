@@ -17,7 +17,9 @@ def build(ctx: Context) -> None:
         if sid is None or ip in ctx.router_ips:
             continue
         seen = ctx.seen.get(ip, {})
-        if "src" in seen or ip in ctx.arp:
+        if ip in ctx.self_ips:
+            ev = ctx.evidence("R-HOST-SELF", ip, ctx.self_ips[ip], "The capture host itself")
+        elif "src" in seen or ip in ctx.arp:
             facts = [seen["src"]] if "src" in seen else []
             for mac_facts in ctx.arp.get(ip, {}).values():
                 facts.extend(mac_facts)
@@ -37,6 +39,7 @@ def build(ctx: Context) -> None:
                 {
                     "ip": ip,
                     "subnet_id": sid,
+                    "is_self": ip in ctx.self_ips,
                     "names": ctx.names(ip),
                     "hop_distance": hops,
                     "os_family_guess": os_family,

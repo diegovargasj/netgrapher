@@ -17,6 +17,7 @@ from netgrapher.net import ip_sort_key, is_virtual_mac
 ROUTER_MAC_MIN_IPS = 3
 
 _SUMMARIES = {
+    "R-RTR-HOSTCFG": "Gateway in the capture host's routing table ({n} route(s))",
     "R-RTR-DHCP": "Announced as router (DHCP option 3) in {n} lease(s)",
     "R-RTR-ICMP": "Sent {n} kind(s) of router-only ICMP (time exceeded, unreachable, redirect)",
     "R-RTR-PROTO": "Routing/redundancy protocol speaker ({n} observation(s))",
@@ -53,7 +54,13 @@ def build(ctx: Context) -> None:
     for lease in ctx.store.by_kind(FactKind.DHCP_LEASE):
         for ip in lease.get("routers", ()):
             claims[ip]["R-RTR-DHCP"].append(lease)
-            ctx.dhcp_router_ips.add(ip)
+            ctx.gateway_ips.add(ip)
+    for route in ctx.store.by_kind(FactKind.HOST_ROUTE):
+        gateway = route.get("gateway")
+        if gateway:
+            claims[gateway]["R-RTR-HOSTCFG"].append(route)
+            if route.subject == "default":
+                ctx.gateway_ips.add(gateway)
     for kind in (FactKind.ICMP_TIME_EXCEEDED, FactKind.ICMP_UNREACHABLE, FactKind.ICMP_REDIRECT):
         for f in ctx.store.by_kind(kind):
             claims[f.subject]["R-RTR-ICMP"].append(f)
@@ -78,7 +85,7 @@ def build(ctx: Context) -> None:
     own_ips_by_mac: dict[str, set[str]] = {}
     for mac in sorted(ctx.router_macs):
         own = ctx.arp_ips_by_mac.get(mac, set()) | (
-            ctx.ips_by_mac.get(mac, set()) & ctx.dhcp_router_ips
+            ctx.ips_by_mac.get(mac, set()) & ctx.gateway_ips
         )
         own_ips_by_mac[mac] = own
         for ip in own:
@@ -147,7 +154,7 @@ def build(ctx: Context) -> None:
             {(n["name"], n["source"]) for ip in [*group, *group_vips] for n in ctx.names(ip)}
         )
         roles = {r for ip in [*group, *group_vips] for r in ctx.roles(ip)}
-        if ctx.dhcp_router_ips & {*group, *group_vips}:
+        if ctx.gateway_ips & {*group, *group_vips}:
             roles.add("default-gateway")
         ctx.graph.add_entity(
             Entity(
@@ -168,6 +175,8 @@ def build(ctx: Context) -> None:
         )
         ctx.router_ips.update(group)
         ctx.router_ips.update(group_vips)
+        for ip in [*group, *group_vips]:
+            ctx.router_of_ip.setdefault(ip, rid)
         for mac in macs:
             ctx.router_of_mac.setdefault(mac, rid)
         for mac, own in own_ips_by_mac.items():

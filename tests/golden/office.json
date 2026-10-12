@@ -24,6 +24,7 @@
       "first_seen": 1760000012.0,
       "hop_distance": 3,
       "ip": "10.20.0.5",
+      "is_self": false,
       "l2_evidence": {
         "macs": []
       },
@@ -42,6 +43,7 @@
       "first_seen": 1760000014.0,
       "hop_distance": 3,
       "ip": "10.20.0.6",
+      "is_self": false,
       "l2_evidence": {
         "macs": []
       },
@@ -60,6 +62,7 @@
       "first_seen": 1760000001.0,
       "hop_distance": 0,
       "ip": "192.168.1.10",
+      "is_self": false,
       "l2_evidence": {
         "macs": [
           "02:00:00:00:00:0a"
@@ -85,6 +88,7 @@
       "first_seen": 1760000017.0,
       "hop_distance": 0,
       "ip": "192.168.1.20",
+      "is_self": false,
       "l2_evidence": {
         "macs": [
           "02:00:00:00:00:14"
@@ -654,9 +658,11 @@
   },
   "runs": [
     {
+      "capture_file": null,
       "cidrs": [],
       "ended": "2025-10-09T08:53:42.000000Z",
       "facts": 49,
+      "hostcfg": null,
       "id": "r1",
       "interfaces": [
         {
@@ -690,6 +696,7 @@
           "ospf": 1
         },
         "truncated_tail": false,
+        "tunneled": 0,
         "unsupported_linktype": 0
       },
       "stop_reason": "end-of-file"

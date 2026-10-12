@@ -24,6 +24,9 @@ def find_onlink(ctx: Context) -> None:
     Evidence: an ARP binding, or L2 frames addressed to/from a MAC that is not a router MAC.
     """
     for ip in ctx.internal_ips():
+        if ip in ctx.self_ips:
+            ctx.onlink[ip] = None
+            continue
         vlans: set[Vlan] = set()
         for facts in ctx.arp.get(ip, {}).values():
             vlans.update(f.get("vlan") for f in facts)
@@ -41,6 +44,16 @@ def find_onlink(ctx: Context) -> None:
 
 def _known_prefixes(ctx: Context) -> dict[Network, list[tuple[str, Fact | None]]]:
     found: defaultdict[Network, list[tuple[str, Fact | None]]] = defaultdict(list)
+    for facts in ctx.self_ips.values():
+        for f in facts:
+            if f.get("prefixlen") < 32:
+                net = ipaddress.ip_network(f"{f.subject}/{f.get('prefixlen')}", strict=False)
+                found[net].append(("R-SUB-HOSTCFG", f))
+    for f in ctx.store.by_kind(FactKind.HOST_ROUTE):
+        if f.subject != "default":
+            net = ipaddress.ip_network(f.subject)
+            if net.version == 4 and net.prefixlen < 32 and not net.is_multicast:
+                found[net].append(("R-SUB-ROUTE", f))
     for lease in ctx.store.by_kind(FactKind.DHCP_LEASE):
         mask = lease.get("mask")
         if mask:
@@ -59,10 +72,18 @@ def _known_prefixes(ctx: Context) -> dict[Network, list[tuple[str, Fact | None]]
 
 
 _SUMMARIES = {
+    "R-SUB-HOSTCFG": "Address and prefix configured on the capture host",
+    "R-SUB-ROUTE": "Route in the capture host's routing table",
     "R-SUB-DHCP": "DHCP lease with subnet mask ({n} message types/clients)",
     "R-SUB-OSPF": "OSPF Hello network mask ({n} speakers)",
     "R-SUB-WELLKNOWN": "IPv4 link-local range (RFC 3927)",
 }
+
+
+def _proves_local(rule: str, fact: Fact | None) -> bool:
+    if rule in ("R-SUB-DHCP", "R-SUB-HOSTCFG"):
+        return True
+    return rule == "R-SUB-ROUTE" and fact is not None and fact.get("gateway") is None
 
 
 def _fit(ip: str, prefixlen: int, taken: list[Network]) -> Network:
@@ -146,7 +167,7 @@ def assign(ctx: Context) -> None:
     for net, info in infos.items():
         sid = subnet_id(str(net))
         if not any(ip in ctx.onlink for ip in members[net]) and not any(
-            rule == "R-SUB-DHCP" for rule, _ in known.get(net, [])
+            _proves_local(rule, fact) for rule, fact in known.get(net, [])
         ):
             info.kind = "remote"
         ctx.subnets[sid] = info

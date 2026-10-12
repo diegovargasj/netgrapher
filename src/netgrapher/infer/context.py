@@ -10,7 +10,8 @@ from dataclasses import dataclass, field
 
 from netgrapher.facts.model import MAX_FRAMES, Fact, FactKind
 from netgrapher.facts.store import FactStore
-from netgrapher.graph.model import Evidence, Graph
+from netgrapher.graph.model import Evidence, Graph, Link
+from netgrapher.infer.confidence import noisy_or
 from netgrapher.infer.weights import WEIGHTS
 from netgrapher.net import ip_sort_key, is_external, is_usable_unicast
 
@@ -53,7 +54,9 @@ class Context:
     subnet_of: dict[str, str] = field(default_factory=dict)  # ip -> subnet id
     router_ips: set[str] = field(default_factory=set)  # interface IPs, including virtual
     router_of_mac: dict[str, str] = field(default_factory=dict)  # mac -> router entity id
-    dhcp_router_ips: set[str] = field(default_factory=set)
+    router_of_ip: dict[str, str] = field(default_factory=dict)  # interface ip -> router id
+    gateway_ips: set[str] = field(default_factory=set)  # default gateways (DHCP, host routes)
+    self_ips: dict[str, list[Fact]] = field(default_factory=dict)  # capture host's addresses
 
     _names: dict[str, set[tuple[str, str]]] = field(default_factory=dict)
     _roles: dict[str, set[str]] = field(default_factory=dict)
@@ -91,12 +94,21 @@ class Context:
             ttls[f.subject].append(f)
         self.ttls = dict(ttls)
 
+        self_ips: defaultdict[str, list[Fact]] = defaultdict(list)
+        for f in self.store.by_kind(FactKind.HOST_ADDRESS):
+            self_ips[f.subject].append(f)
+        self.self_ips = dict(self_ips)
+
         self.all_ips = {ip for ip in self._referenced_ips() if is_usable_unicast(ip)}
         self._index_names_and_roles()
 
     def _referenced_ips(self) -> Iterable[str]:
         yield from self.seen
         yield from self.arp
+        yield from self.self_ips
+        for f in self.store.by_kind(FactKind.HOST_ROUTE):
+            if f.get("gateway"):
+                yield f.get("gateway")
         for f in self.store.by_kind(FactKind.DHCP_LEASE):
             yield f.subject
             yield from f.get("routers", ())
@@ -109,6 +121,7 @@ class Context:
             FactKind.ROUTING_SPEAKER,
             FactKind.SERVICE,
             FactKind.SUBNET_HINT,
+            FactKind.HOST_RESOLVER,
         ):
             for f in self.store.by_kind(kind):
                 yield f.subject
@@ -131,7 +144,7 @@ class Context:
         return self.sorted_ips(ip for ip in self.all_ips if is_external(ip))
 
     def facts_about(self, ip: str) -> list[Fact]:
-        facts = list(self.seen.get(ip, {}).values())
+        facts = list(self.seen.get(ip, {}).values()) + self.self_ips.get(ip, [])
         for mac_facts in self.arp.get(ip, {}).values():
             facts.extend(mac_facts)
         return facts
@@ -167,6 +180,8 @@ class Context:
         roles: defaultdict[str, set[str]] = defaultdict(set)
         for f in self.store.by_kind(FactKind.SERVICE):
             roles[f.subject].add(f"{f.get('service')}-server")
+        for f in self.store.by_kind(FactKind.HOST_RESOLVER):
+            roles[f.subject].add("dns-server")
         for lease in self.store.by_kind(FactKind.DHCP_LEASE):
             if lease.get("chaddr") in hostnames:
                 names[lease.subject].add((hostnames[lease.get("chaddr")], "dhcp"))
@@ -196,3 +211,18 @@ class Context:
 
     def weight_of(self, evidence_ids: Iterable[str]) -> list[float]:
         return [self.graph.evidence[e].weight for e in evidence_ids]
+
+    def add_or_merge_link(self, link: Link) -> None:
+        """Add a link; if it exists, merge evidence and attributes and recompute confidence."""
+        existing = self.graph.links.get(link.id)
+        if existing is None:
+            self.graph.add_link(link)
+            return
+        existing.evidence = sorted(set(existing.evidence) | set(link.evidence))
+        existing.confidence = noisy_or(self.weight_of(existing.evidence))
+        basis = sorted(set(existing.attrs.get("basis", [])) | set(link.attrs.get("basis", [])))
+        for key, value in link.attrs.items():
+            if existing.attrs.get(key) is None:
+                existing.attrs[key] = value
+        if basis:
+            existing.attrs["basis"] = basis
