@@ -109,3 +109,4 @@ pre { white-space: pre-wrap; max-height: 60vh; overflow: auto; font-size: 12px; 
 .badge { font-size: 10px; padding: 0 5px; border-radius: 8px; background: var(--node-self);
   color: #fff; vertical-align: middle; }
 .linking #cy { cursor: crosshair; }
+.badge-unconfirmed { background: var(--muted); }

@@ -4,7 +4,6 @@ import { api, itemPath } from "./api.js";
 import { clear, h } from "./dom.js";
 import { defaultLabel, linkDefaultLabel, labelOf } from "./graph.js";
 
-const pct = (v) => (v == null ? "?" : `${Math.round(v * 100)}%`);
 const time = (ts) => (ts ? new Date(ts * 1000).toLocaleString() : "");
 const list = (items) => (items && items.length ? items.join(", ") : "—");
 const names = (n) => list((n || []).map((x) => `${x.name} (${x.source})`));
@@ -20,7 +19,7 @@ function entityRows(id, e, ctx) {
   switch (e.type) {
     case "subnet":
       return attrs([
-        ["Prefix", e.prefix], ["Kind", e.kind], ["Prefix confidence", pct(e.prefix_confidence)],
+        ["Prefix", e.prefix], ["Kind", e.kind],
         ["Gateways", e.gateway_ids?.length ? h("span", {}, ...e.gateway_ids.flatMap((g, i) => [i ? ", " : "", go(g)])) : "—"],
         ["DHCP servers", list(e.dhcp_servers)],
       ]);
@@ -32,11 +31,10 @@ function entityRows(id, e, ctx) {
           ["MACs (evidence)", list(e.l2_evidence?.macs)],
         ]),
         h("table", { className: "small" },
-          h("tr", {}, h("th", {}, "Interface"), h("th", {}, "Subnet"), h("th", {}, "Conf.")),
+          h("tr", {}, h("th", {}, "Interface"), h("th", {}, "Subnet")),
           ...(e.interfaces || []).map((i) => h("tr", {},
             h("td", {}, i.ip + (i.virtual ? " (virtual)" : "")),
-            h("td", {}, i.subnet ? go(i.subnet) : "—"),
-            h("td", {}, pct(i.confidence))))));
+            h("td", {}, i.subnet ? go(i.subnet) : "—")))));
     case "host":
       return attrs([
         ["IP", e.ip], ["Subnet", e.subnet_id ? go(e.subnet_id) : "—"], ["Names", names(e.names)],
@@ -104,12 +102,14 @@ export function renderDetails(root, ctx, id) {
     if (note.value !== (ann.note || "")) ctx.edit([{ id, patch: { note: note.value || null } }]);
   });
 
-  const conf = entity ? entity.confidence : link.confidence;
-  const isUser = (entity || link).origin === "user";
+  const item = entity || link;
+  const isUser = item.origin === "user";
+  const unconfirmed = item.confirmed === false;
   root.append(
     input,
     h("div", { className: "muted" },
-      `${entity ? entity.type.replace("_", " ") : `${link.type} link`} · ${id} · confidence ${pct(conf)} `,
+      `${entity ? entity.type.replace("_", " ") : `${link.type} link`} · ${id} `,
+      unconfirmed ? h("span", { className: "badge badge-unconfirmed" }, "unconfirmed") : null,
       isUser ? h("span", { className: "badge" }, "added") : null),
     h("div", { className: "actions" },
       h("button", { onclick: () => ctx.edit([{ id, patch: { hidden: ann.hidden ? null : true } }]) },

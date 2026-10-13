@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from netgrapher.export import ExportFormat, export_project
 from netgrapher.graph.ids import AliasTable, link_id
-from netgrapher.graph.model import Entity, EntityType, Graph, Link
+from netgrapher.graph.model import Entity, EntityType, Graph, Link, is_confirmed
 from netgrapher.project.compose import rendered_entities, rendered_links
 from netgrapher.project.format import Project
 from netgrapher.project.store import ProjectError, dumps, load, loads
@@ -179,7 +179,7 @@ def build_router(state: AppState, token: str, allowed_hosts: Callable[[], set[st
                 "entities": {
                     eid: _entity_payload(state.project, entities, eid) for eid in entities
                 },
-                "links": {lid: lk.to_dict() for lid, lk in links.items()},
+                "links": {lid: link_payload(lk) for lid, lk in links.items()},
                 "deleted": list(state.project.deleted),
             }
         state.bus.publish(event)
@@ -315,7 +315,7 @@ def build_router(state: AppState, token: str, allowed_hosts: Callable[[], set[st
         broadcast_user_graph()
         with state.lock:
             _, links = _composed(state.project)
-            return {"id": lid, "link": links[lid].to_dict()}
+            return {"id": lid, "link": link_payload(links[lid])}
 
     @router.delete("/entities/{item_id:path}")
     def delete_entity(item_id: str) -> dict[str, Any]:
@@ -436,7 +436,12 @@ def entity_payload(graph: Graph, eid: str) -> dict[str, Any]:
             for part in graph.evidence[e].provenance.split("+")
         }
     )
-    return {**entity.to_dict(), "origin": "discovered", "provenance": provenance}
+    return {
+        **entity.to_dict(),
+        "origin": "discovered",
+        "provenance": provenance,
+        "confirmed": is_confirmed(entity.confidence),
+    }
 
 
 def _containing_subnet(entities: dict[str, Entity], ip: str) -> str | None:
@@ -456,6 +461,10 @@ def _containing_subnet(entities: dict[str, Entity], ip: str) -> str | None:
     return best[1] if best else None
 
 
+def link_payload(link: Link) -> dict[str, Any]:
+    return {**link.to_dict(), "confirmed": is_confirmed(link.confidence)}
+
+
 def _composed(project: Project) -> tuple[dict[str, Entity], dict[str, Link]]:
     entities = rendered_entities(project)
     return entities, rendered_links(project, entities)
@@ -464,7 +473,7 @@ def _composed(project: Project) -> tuple[dict[str, Entity], dict[str, Link]]:
 def _entity_payload(project: Project, entities: dict[str, Entity], eid: str) -> dict[str, Any]:
     entity = entities[eid]
     if entity.attrs.get("origin") == "user":
-        return {**entity.to_dict(), "provenance": ["user"]}
+        return {**entity.to_dict(), "provenance": ["user"], "confirmed": True}
     return entity_payload(project.graph, eid)
 
 
@@ -509,7 +518,7 @@ def project_payload(state: AppState) -> dict[str, Any]:
         "dirty": state.dirty,
         "can_save": state.path is not None,
         "entities": {eid: _entity_payload(project, entities, eid) for eid in entities},
-        "links": {lid: link.to_dict() for lid, link in links.items()},
+        "links": {lid: link_payload(link) for lid, link in links.items()},
         "annotations": project.annotations,
         "aliases": project.aliases,
         "view": project.view,

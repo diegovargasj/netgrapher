@@ -173,7 +173,7 @@ In scope:
 | FR-UI-2 | The user MUST be able to rename subnets, routers, hosts and links. The original identifier MUST stay visible in the tooltip and details panel. | MUST | v1 |
 | FR-UI-3 | The user MUST be able to hide individual subnets, routers, hosts and links. | MUST | v1 |
 | FR-UI-4 | Hiding a subnet MUST hide its hosts and links. Hiding a router MUST hide its links. Hiding a link MUST hide only that link. | MUST | v1 |
-| FR-UI-5 | The user MUST be able to hide items by filter rule: type, confidence below a threshold, provenance, external, address range. | MUST | v1 |
+| FR-UI-5 | The user MUST be able to hide items by filter rule: type, unconfirmed, provenance, external, address range. | MUST | v1 |
 | FR-UI-6 | A "Hidden items" panel MUST list manually hidden items so they can be restored. A "show hidden" toggle MUST display them faded. | MUST | v1 |
 | FR-UI-7 | The UI MUST save the project (to its current path) and offer "Save as" (download). Autosave MUST protect unsaved edits. | MUST | v1 |
 | FR-UI-8 | The UI MUST open previously saved projects. | MUST | v1 |
@@ -597,7 +597,7 @@ Rules:
 | External | Cloud shape |
 | Unknown router | Grey dashed node with a "?" |
 | Provenance | Solid = observed (passive/hostcfg); double = confirmed by probe; dashed = inferred |
-| Confidence | Opacity, from 0.35 to 1.0 |
+| Confirmation | Confirmed entities/links are solid; **unconfirmed** ones (weak evidence — e.g. a host only seen as a reference, or a heuristic subnet) are faded and dashed. The underlying confidence value is kept in the model, but the UI shows a binary "unconfirmed" tag instead of a percentage (confirmed = confidence ≥ 0.7, see `graph/model.py`). |
 | New in live mode | Pulse highlight for 5 s |
 
 ### 11.4 Editing behavior
@@ -868,4 +868,5 @@ Sample pcap sources: the Wireshark SampleCaptures wiki, plus captures generated 
 | 2026-10-11 | Annotations stored separately with stable IDs. Resume/merge designed now, implemented in v2. |
 | 2026-10-11 | Project format: versioned gzipped JSON (`.ngraph`). |
 | 2026-10-12 | UI graph editing (create/delete nodes, networks, links) added as a user overlay; supersedes the earlier hide-only decision. |
+| 2026-10-12 | UI shows a binary "unconfirmed" tag (confidence < 0.7) instead of a confidence percentage; the min-confidence filter became a "hide unconfirmed" toggle. Confidence is still kept in the model, exports and report. |
 | 2026-10-11 | License: MIT. |

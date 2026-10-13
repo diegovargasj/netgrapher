@@ -40,14 +40,16 @@ export function parentOf(state, entity) {
 export function nodeData(state, id, e) {
   const label = labelOf(state, id);
   return {
-    id, type: e.type, label, displayLabel: label, conf: e.confidence,
+    id, type: e.type, label, displayLabel: label,
+    confirmed: e.confirmed === false ? 0 : 1,
     kind: e.kind || "", self: e.is_self ? 1 : 0,
   };
 }
 
 export function edgeData(state, id, l) {
   const label = labelOf(state, id);
-  return { id, source: l.a, target: l.b, type: l.type, label, displayLabel: label, conf: l.confidence };
+  return { id, source: l.a, target: l.b, type: l.type, label, displayLabel: label,
+           confirmed: l.confirmed === false ? 0 : 1 };
 }
 
 /** positions: optional {id: {x, y}} that wins over saved positions (used when resyncing live). */
@@ -172,12 +174,14 @@ function cssVar(name) {
 
 export function stylesheet() {
   const c = (n) => cssVar(n);
-  const opacity = "mapData(conf, 0, 1, 0.35, 1)";
   return [
     { selector: "node", style: {
       label: "data(displayLabel)", color: c("--text"), "font-size": 10,
       "text-valign": "bottom", "text-margin-y": 3, "text-wrap": "ellipsis", "text-max-width": 140,
-      "background-color": c("--node-host"), width: 14, height: 14, opacity,
+      "background-color": c("--node-host"), width: 14, height: 14,
+    } },
+    { selector: "node[confirmed = 0]", style: {
+      opacity: 0.55, "border-width": 1.5, "border-style": "dashed", "border-color": c("--muted"),
     } },
     { selector: 'node[type = "subnet"]', style: {
       shape: "round-rectangle", "background-color": c("--node-subnet-bg"),
@@ -203,12 +207,13 @@ export function stylesheet() {
     } },
     { selector: "node.collapsed", style: { width: 90, height: 40 } },
     { selector: "edge", style: {
-      width: 1.5, "line-color": c("--edge"), "curve-style": "bezier", opacity,
+      width: 1.5, "line-color": c("--edge"), "curve-style": "bezier",
       label: "data(displayLabel)", "font-size": 9, color: c("--muted"),
       "text-background-color": c("--bg"), "text-background-opacity": 0.8,
       "text-background-padding": 1, "text-rotation": "autorotate",
     } },
     { selector: 'edge[type = "inferred-path"]', style: { "line-style": "dashed" } },
+    { selector: "edge[confirmed = 0]", style: { opacity: 0.5, "line-style": "dashed" } },
     { selector: 'edge[type = "uplink"]', style: { width: 2.5 } },
     { selector: ".ghost", style: { opacity: 0.18 } },
     { selector: ".gone", style: { display: "none" } },
@@ -254,7 +259,7 @@ function inCidr(cidr, address) {
 function filteredOut(entity, id, view) {
   const types = getFilter(view, "entity_types", null);
   if (types && !types.includes(entity.type)) return true;
-  if (entity.confidence < getFilter(view, "confidence_below", 0)) return true;
+  if (getFilter(view, "hide_unconfirmed", false) && entity.confirmed === false) return true;
   const prov = getFilter(view, "provenance_required", null);
   if (prov && !(entity.provenance || []).includes(prov)) return true;
   const cidr = parseCidr(getFilter(view, "hide_cidr", ""));

@@ -362,3 +362,28 @@ def test_delete_subnet_cascades_in_ui(page: Any, server: tuple[str, Any]) -> Non
     )
     assert "net:10.20.0.0/24" in state.project.deleted
     assert all(h in state.project.deleted for h in hosts)
+
+
+def test_unconfirmed_tag_replaces_percentage(page: Any) -> None:
+    """Entities show an 'unconfirmed' tag instead of a confidence percentage; confirmed ones don't,
+    and the filter can hide unconfirmed entities."""
+    # A heuristic remote subnet is unconfirmed; the gateway router is confirmed.
+    assert page.evaluate(
+        "window.netgrapher.cy().getElementById('net:10.20.0.0/24').data('confirmed')"
+    ) == 0
+    assert page.evaluate(f"window.netgrapher.cy().getElementById('{GW}').data('confirmed')") == 1
+
+    select_node(page, "net:10.20.0.0/24")
+    details = page.locator("#details").inner_text()
+    assert "unconfirmed" in details
+    assert "%" not in details and "confidence" not in details.lower()
+
+    select_node(page, GW)
+    assert "unconfirmed" not in page.locator("#details").inner_text()
+
+    # The "Hide unconfirmed" filter removes the unconfirmed subnet.
+    page.locator("#hide-unconfirmed").check()
+    page.wait_for_function(
+        "window.netgrapher.cy().getElementById('net:10.20.0.0/24').hasClass('gone')"
+    )
+    assert not page.evaluate(f"window.netgrapher.cy().getElementById('{GW}').hasClass('gone')")

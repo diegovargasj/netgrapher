@@ -474,9 +474,7 @@ function syncFilterControls() {
   for (const box of $("type-filters").querySelectorAll("input")) {
     box.checked = !types || types.includes(box.value);
   }
-  const conf = getFilter(state.view, "confidence_below", 0);
-  $("conf-min").value = conf;
-  $("conf-out").textContent = Number(conf).toFixed(2);
+  $("hide-unconfirmed").checked = Boolean(getFilter(state.view, "hide_unconfirmed", false));
   $("prov-filter").value = getFilter(state.view, "provenance_required", "") || "";
   $("hide-cidr").value = getFilter(state.view, "hide_cidr", "") || "";
   $("show-hidden").checked = Boolean(state.view.show_hidden);
@@ -485,10 +483,8 @@ function syncFilterControls() {
 
 function wireFilters() {
   buildTypeFilters();
-  $("conf-min").addEventListener("input", (e) => {
-    const value = Number(e.target.value);
-    $("conf-out").textContent = value.toFixed(2);
-    setFilter(state.view, "confidence_below", value > 0 ? value : null);
+  $("hide-unconfirmed").addEventListener("change", (e) => {
+    setFilter(state.view, "hide_unconfirmed", e.target.checked ? true : null);
     refresh();
     saveView();
   });

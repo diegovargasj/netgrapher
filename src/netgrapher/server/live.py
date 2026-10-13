@@ -9,7 +9,7 @@ from netgrapher.discover import Status
 from netgrapher.graph.diff import diff_graphs, migrate_annotations
 from netgrapher.graph.model import Graph
 from netgrapher.project.format import Project
-from netgrapher.server.api import entity_payload
+from netgrapher.server.api import entity_payload, link_payload
 from netgrapher.server.state import AppState
 
 
@@ -47,7 +47,7 @@ class LiveSession:
                 },
                 "removed": d.removed,
                 "links": {
-                    lid: graph.links[lid].to_dict()
+                    lid: link_payload(graph.links[lid])
                     for lid in d.links_added + d.links_updated
                     if lid not in tombstoned
                 },

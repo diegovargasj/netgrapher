@@ -307,3 +307,26 @@ def test_user_entities_round_trip(client: TestClient, state: AppState, tmp_path:
     entities = rendered_entities(reloaded)
     assert "host:192.168.1.10" not in entities
     assert any(e.attrs.get("origin") == "user" for e in entities.values())
+
+
+def test_confirmed_flag_in_payload() -> None:
+    """Entities carry a `confirmed` flag: observed/probed are confirmed, referenced-only are not."""
+    from synthetic import GW_MAC, LAPTOP_MAC, eth, tcp
+
+    from netgrapher.graph.model import is_confirmed
+
+    assert is_confirmed(1.0) and not is_confirmed(0.5)
+
+    # The laptop sends to 10.50.0.9, which never replies -> referenced-only (unconfirmed).
+    frames = [eth(LAPTOP_MAC, GW_MAC, tcp("10.0.0.10", "10.50.0.9", 40000, 443))]
+    state = AppState()
+    state.open(Project(graph=graph_from_frames(frames)), None)
+    c = TestClient(create_app(state, TOKEN, lambda: {HOST}), base_url=f"http://{HOST}")
+    c.post("/api/session", headers={"X-Netgrapher-Token": TOKEN})
+    entities = c.get("/api/project").json()["entities"]
+    assert all("confirmed" in e for e in entities.values())
+    assert entities["host:10.0.0.10"]["confirmed"] is True  # sent traffic
+    assert entities["host:10.50.0.9"]["confirmed"] is False  # only a destination
+    # User-created entities are confirmed.
+    c.post("/api/entities", json={"type": "host", "ip": "10.0.0.77"})
+    assert c.get("/api/project").json()["entities"]["host:10.0.0.77"]["confirmed"] is True

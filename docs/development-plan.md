@@ -244,6 +244,9 @@ paths, and latent issues.
 - **Inference recomputes the whole graph every 2s** (`discover.py` tick). On long/busy captures
   this is O(facts) each tick and can fall behind, filling the queue and causing dumpcap drops.
   Incremental inference is a real TODO (design §5.3).
+- **The UI shows a binary "unconfirmed" tag** (confidence < `CONFIRMED_THRESHOLD` = 0.7 in
+  `graph/model.py`), not a percentage; confidence itself is still in the model, exports and the
+  report. The threshold is a tunable guess like the rule weights.
 - **Rule weights are guesses** (`infer/weights.py`). They were never calibrated against ground
   truth because `tests/labs/` is empty. Expect precision/recall to need tuning.
 - **User-created `member` links don't reparent** a host into a subnet visually (they are recorded

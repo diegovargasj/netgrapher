@@ -6,6 +6,14 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+# An entity/link is "confirmed" when there is solid evidence for it (vs weak inference such as a
+# host only seen as a reference, or a heuristic subnet). Used by the UI's "unconfirmed" tag.
+CONFIRMED_THRESHOLD = 0.7
+
+
+def is_confirmed(confidence: float) -> bool:
+    return confidence >= CONFIRMED_THRESHOLD
+
 
 class EntityType(StrEnum):
     SUBNET = "subnet"
