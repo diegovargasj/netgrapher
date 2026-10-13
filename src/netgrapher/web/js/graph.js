@@ -124,47 +124,111 @@ export function gridAllSubnets(cy, state) {
 }
 
 /** Place freshly added nodes without moving the rest; subnets with new hosts are re-gridded. */
+const PLACE_PAD = 36; // keep this much clear space around a newly placed element
+
+function rectsOverlap(a, b, pad) {
+  return !(a.x2 + pad <= b.x1 || b.x2 + pad <= a.x1 || a.y2 + pad <= b.y1 || b.y2 + pad <= a.y1);
+}
+
+function unionBox(rects) {
+  return {
+    x1: Math.min(...rects.map((r) => r.x1)), y1: Math.min(...rects.map((r) => r.y1)),
+    x2: Math.max(...rects.map((r) => r.x2)), y2: Math.max(...rects.map((r) => r.y2)),
+  };
+}
+
+/** A centre for a w×h box near (cx, cy) that overlaps nothing in `occupied`; spirals outward. */
+function freeSpot(occupied, w, h, cx, cy) {
+  const step = Math.max(w, h) / 2 + PLACE_PAD;
+  const fits = (x, y) => {
+    const rect = { x1: x - w / 2, y1: y - h / 2, x2: x + w / 2, y2: y + h / 2 };
+    return !occupied.some((o) => rectsOverlap(rect, o, PLACE_PAD));
+  };
+  if (fits(cx, cy)) return { x: cx, y: cy };
+  for (let ring = 1; ring <= 40; ring++) {
+    for (let dx = -ring; dx <= ring; dx++) {
+      for (let dy = -ring; dy <= ring; dy++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue; // perimeter only
+        const x = cx + dx * step;
+        const y = cy + dy * step;
+        if (fits(x, y)) return { x, y };
+      }
+    }
+  }
+  return { x: cx, y: cy };
+}
+
+/** Bounding boxes (with labels) of already-placed, visible top-level nodes — the graph footprint. */
+function footprint(cy, pending) {
+  const rects = [];
+  cy.nodes().forEach((n) => {
+    if (n.hasClass("gone") || n.parent().nonempty() || pending.has(n.id())) return;
+    rects.push(n.boundingBox({ includeLabels: true, includeOverlays: false }));
+  });
+  return rects;
+}
+
+function moveSubnetTo(subnet, cx, cy) {
+  const bb = subnet.boundingBox({ includeLabels: true, includeOverlays: false });
+  const dx = cx - (bb.x1 + bb.x2) / 2;
+  const dy = cy - (bb.y1 + bb.y2) / 2;
+  subnet.children(":childless").forEach((c) => {
+    const p = c.position();
+    c.position({ x: p.x + dx, y: p.y + dy });
+  });
+}
+
 export function placeNewNodes(cy, state, newIds) {
   const pending = new Set(newIds);
   const isPlaced = (n) => !pending.has(n.id());
-  const jitter = () => (Math.random() - 0.5) * 30;
   const fresh = cy.collection(newIds.map((id) => cy.getElementById(id)).filter((n) => n.nonempty()));
 
-  // Non-subnet leaves with no parent (routers, external, unknown): anchor near a placed neighbour.
-  let fallbackRow = 0;
-  fresh.filter((n) => !n.isParent() && n.parent().empty()).forEach((n) => {
-    const around = n.neighborhood("node").filter(isPlaced);
-    let anchor = null;
-    if (around.nonempty()) {
-      const bb = around.boundingBox();
-      anchor = { x: (bb.x1 + bb.x2) / 2 + 90, y: (bb.y1 + bb.y2) / 2 + 40 };
-    } else {
-      const placed = cy.nodes().filter((m) => isPlaced(m) && !m.isParent() && m.parent().empty());
-      const bb = placed.nonempty() ? placed.boundingBox() : { x2: 0, y1: 0 };
-      anchor = { x: bb.x2 + 120, y: bb.y1 + 70 * fallbackRow++ };
+  // 1. Existing subnets that merely gained a host: re-grid their children in place (no relocation).
+  const grownSubnets = new Set();
+  fresh.forEach((n) => {
+    const parent = n.parent();
+    if (!n.isParent() && parent.nonempty() && parent.data("type") === "subnet"
+        && isPlaced(parent)) {
+      grownSubnets.add(parent.id());
     }
-    n.position({ x: anchor.x + jitter(), y: anchor.y + jitter() });
-    pending.delete(n.id());
+  });
+  grownSubnets.forEach((id) => gridSubnetChildren(cy, state, cy.getElementById(id)));
+
+  // 2. Build the current footprint; new elements claim free space and extend it as we go.
+  const occupied = footprint(cy, pending);
+  const preferredCentre = (node, w, h) => {
+    const neigh = node.neighborhood("node").filter((m) => isPlaced(m) && !m.hasClass("gone"));
+    if (neigh.nonempty()) {
+      const bb = neigh.boundingBox();
+      return { x: (bb.x1 + bb.x2) / 2, y: (bb.y1 + bb.y2) / 2 };
+    }
+    if (occupied.length) {
+      const g = unionBox(occupied);
+      return { x: g.x2 + w / 2 + PLACE_PAD, y: (g.y1 + g.y2) / 2 };
+    }
+    return { x: 0, y: 0 };
+  };
+
+  // 3. New subnets: grid their children, measure, then drop the whole box into free space.
+  fresh.filter((n) => n.isParent() && pending.has(n.id())).forEach((subnet) => {
+    subnet.children(":childless").forEach((c, i) => c.position({ x: i * GRID_STEP_X, y: 0 }));
+    gridSubnetChildren(cy, state, subnet);
+    const bb = subnet.boundingBox({ includeLabels: true, includeOverlays: false });
+    const pref = preferredCentre(subnet, bb.w, bb.h);
+    const spot = freeSpot(occupied, bb.w, bb.h, pref.x, pref.y);
+    moveSubnetTo(subnet, spot.x, spot.y);
+    occupied.push(subnet.boundingBox({ includeLabels: true, includeOverlays: false }));
+    pending.delete(subnet.id());
   });
 
-  // Each subnet that gained a host (or is itself new): re-grid its children as a block.
-  const touched = new Set();
-  fresh.forEach((n) => {
-    const parent = n.isParent() ? n : n.parent();
-    if (parent.nonempty() && parent.data("type") === "subnet") touched.add(parent.id());
-  });
-  touched.forEach((id) => {
-    const subnet = cy.getElementById(id);
-    // A brand-new subnet with children needs a starting anchor before its grid is centred.
-    const unplacedParent = pending.has(id);
-    if (unplacedParent) {
-      const around = subnet.neighborhood("node").filter(isPlaced);
-      const seed = around.nonempty()
-        ? (() => { const b = around.boundingBox(); return { x: (b.x1 + b.x2) / 2, y: b.y2 + 120 }; })()
-        : { x: 0, y: 0 };
-      subnet.children(":childless").forEach((c, i) => c.position({ x: seed.x + i, y: seed.y }));
-    }
-    gridSubnetChildren(cy, state, subnet);
+  // 4. New standalone nodes (routers, external, unknown): drop each into free space near neighbours.
+  fresh.filter((n) => !n.isParent() && n.parent().empty() && pending.has(n.id())).forEach((n) => {
+    const bb = n.boundingBox({ includeLabels: true, includeOverlays: false });
+    const pref = preferredCentre(n, bb.w, bb.h);
+    const spot = freeSpot(occupied, bb.w, bb.h, pref.x, pref.y);
+    n.position(spot);
+    occupied.push(n.boundingBox({ includeLabels: true, includeOverlays: false }));
+    pending.delete(n.id());
   });
 }
 

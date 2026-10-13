@@ -233,3 +233,93 @@ def test_hosts_are_ordered_by_ip_and_stable(live: tuple[str, Any]) -> None:
         for hid, before_pos in pos.items():
             assert after[hid] == pytest.approx(before_pos, abs=0.01), hid
         browser.close()
+
+
+def test_new_networks_do_not_overlap(live: tuple[str, Any]) -> None:
+    """Newly discovered networks must claim free space, not land on top of existing ones."""
+    from netgrapher.graph.model import Entity, EntityType, Graph, Link, LinkType
+
+    url, session = live
+
+    def build(remote_prefixes: list[str]) -> Graph:
+        entities = {
+            "rtr:10.0.0.1": Entity(
+                "rtr:10.0.0.1",
+                EntityType.ROUTER,
+                1.0,
+                {
+                    "interfaces": [
+                        {"ip": "10.0.0.1", "subnet": None, "virtual": False, "confidence": 1.0}
+                    ]
+                },
+                [],
+            ),
+            "net:10.0.0.0/24": Entity(
+                "net:10.0.0.0/24",
+                EntityType.SUBNET,
+                1.0,
+                {"prefix": "10.0.0.0/24", "kind": "local"},
+                [],
+            ),
+        }
+        links = {}
+        for prefix in remote_prefixes:
+            sid = f"net:{prefix}"
+            entities[sid] = Entity(
+                sid, EntityType.SUBNET, 1.0, {"prefix": prefix, "kind": "remote"}, []
+            )
+            base = prefix.split("/")[0].rsplit(".", 1)[0]
+            for j in range(2, 6):
+                hid = f"host:{base}.{j}"
+                entities[hid] = Entity(
+                    hid, EntityType.HOST, 1.0, {"ip": f"{base}.{j}", "subnet_id": sid}, []
+                )
+                links[f"lnk:member:{hid}|{sid}"] = Link(
+                    f"lnk:member:{hid}|{sid}", LinkType.MEMBER, hid, sid, 1.0
+                )
+            links[f"lnk:p:{prefix}"] = Link(
+                f"lnk:inferred-path:rtr:10.0.0.1|{sid}",
+                LinkType.INFERRED_PATH,
+                "rtr:10.0.0.1",
+                sid,
+                0.9,
+                {"hops": 2},
+            )
+        return Graph(entities, links, {})
+
+    with playwright_api.sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=CHROMIUM, headless=True)
+        page = browser.new_context(
+            viewport={"width": 1300, "height": 850}, bypass_csp=True
+        ).new_page()
+        page.goto(f"{url}/#token={TOKEN}")
+        page.wait_for_function("window.netgrapher && window.netgrapher.cy().nodes().length === 0")
+        session.publish_graph(build([]))
+        page.wait_for_function(
+            "window.netgrapher.cy().getElementById('net:10.0.0.0/24').nonempty()"
+        )
+        # Discover several remote networks at once.
+        session.publish_graph(
+            build(["10.20.0.0/24", "10.30.0.0/24", "10.40.0.0/24", "10.50.0.0/24"])
+        )
+        page.wait_for_function(
+            "window.netgrapher.cy().getElementById('net:10.50.0.0/24').nonempty()"
+        )
+
+        boxes = page.evaluate(
+            "() => window.netgrapher.cy().nodes('[type=\"subnet\"]').map(n => {"
+            "const b = n.boundingBox({includeLabels: true}); "
+            "return {id: n.id(), x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2};})"
+        )
+
+        def overlap(a: dict, b: dict) -> bool:
+            return not (
+                a["x2"] <= b["x1"] or b["x2"] <= a["x1"] or a["y2"] <= b["y1"] or b["y2"] <= a["y1"]
+            )
+
+        pairs = [
+            (a["id"], b["id"]) for i, a in enumerate(boxes) for b in boxes[i + 1 :] if overlap(a, b)
+        ]
+        assert pairs == [], f"overlapping networks: {pairs}"
+        assert len(boxes) == 5
+        browser.close()
