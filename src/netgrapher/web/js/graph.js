@@ -168,6 +168,61 @@ function footprint(cy, pending) {
   return rects;
 }
 
+function translateNode(n, dx, dy) {
+  if (dx === 0 && dy === 0) return;
+  if (n.isParent()) {
+    n.children(":childless").forEach((c) => {
+      const p = c.position();
+      c.position({ x: p.x + dx, y: p.y + dy });
+    });
+  } else {
+    const p = n.position();
+    n.position({ x: p.x + dx, y: p.y + dy });
+  }
+}
+
+/**
+ * Push overlapping top-level nodes apart. Nodes in `anchored` (grown/just-placed) and pinned nodes
+ * stay put; movable neighbours are nudged out along the axis of least overlap until nothing
+ * overlaps (or a few iterations pass).
+ */
+function resolveOverlaps(cy, state, anchored) {
+  const fixed = new Set(anchored);
+  const pinned = (id) => Boolean(state.annotations[id]?.pinned);
+  const tops = cy.nodes().filter((n) => !n.hasClass("gone") && n.parent().empty());
+  if (tops.length < 2) return;
+  const box = (n) => n.boundingBox({ includeLabels: true, includeOverlays: false });
+  for (let iter = 0; iter < 16; iter++) {
+    const items = tops.map((n) => ({ n, id: n.id(), box: box(n) }));
+    let moved = false;
+    for (let i = 0; i < items.length; i++) {
+      for (let j = i + 1; j < items.length; j++) {
+        const a = items[i];
+        const b = items[j];
+        if (!rectsOverlap(a.box, b.box, PLACE_PAD)) continue;
+        const aMov = !fixed.has(a.id) && !pinned(a.id);
+        const bMov = !fixed.has(b.id) && !pinned(b.id);
+        if (!aMov && !bMov) continue; // both anchored: cannot separate them
+        const overlapX = Math.min(a.box.x2, b.box.x2) - Math.max(a.box.x1, b.box.x1) + PLACE_PAD;
+        const overlapY = Math.min(a.box.y2, b.box.y2) - Math.max(a.box.y1, b.box.y1) + PLACE_PAD;
+        const aLeft = (a.box.x1 + a.box.x2) <= (b.box.x1 + b.box.x2);
+        const aAbove = (a.box.y1 + a.box.y2) <= (b.box.y1 + b.box.y2);
+        let dx = 0;
+        let dy = 0;
+        if (overlapX < overlapY) dx = aLeft ? -overlapX : overlapX;
+        else dy = aAbove ? -overlapY : overlapY;
+        const share = aMov && bMov ? 0.5 : 1;
+        if (aMov) translateNode(a.n, dx * share, dy * share);
+        if (bMov) translateNode(b.n, -dx * share, -dy * share);
+        a.box = box(a.n);
+        b.box = box(b.n);
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+}
+
 function moveSubnetTo(subnet, cx, cy) {
   const bb = subnet.boundingBox({ includeLabels: true, includeOverlays: false });
   const dx = cx - (bb.x1 + bb.x2) / 2;
@@ -193,6 +248,7 @@ export function placeNewNodes(cy, state, newIds) {
     }
   });
   grownSubnets.forEach((id) => gridSubnetChildren(cy, state, cy.getElementById(id)));
+  const anchored = new Set(grownSubnets);
 
   // 2. Build the current footprint; new elements claim free space and extend it as we go.
   const occupied = footprint(cy, pending);
@@ -218,6 +274,7 @@ export function placeNewNodes(cy, state, newIds) {
     const spot = freeSpot(occupied, bb.w, bb.h, pref.x, pref.y);
     moveSubnetTo(subnet, spot.x, spot.y);
     occupied.push(subnet.boundingBox({ includeLabels: true, includeOverlays: false }));
+    anchored.add(subnet.id());
     pending.delete(subnet.id());
   });
 
@@ -228,8 +285,12 @@ export function placeNewNodes(cy, state, newIds) {
     const spot = freeSpot(occupied, bb.w, bb.h, pref.x, pref.y);
     n.position(spot);
     occupied.push(n.boundingBox({ includeLabels: true, includeOverlays: false }));
+    anchored.add(n.id());
     pending.delete(n.id());
   });
+
+  // 5. A grown subnet may now overlap its neighbours: nudge the movable ones aside.
+  if (grownSubnets.size || anchored.size) resolveOverlaps(cy, state, anchored);
 }
 
 function cssVar(name) {

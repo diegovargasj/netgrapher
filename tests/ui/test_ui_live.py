@@ -323,3 +323,66 @@ def test_new_networks_do_not_overlap(live: tuple[str, Any]) -> None:
         assert pairs == [], f"overlapping networks: {pairs}"
         assert len(boxes) == 5
         browser.close()
+
+
+def test_growing_subnet_nudges_neighbours(live: tuple[str, Any]) -> None:
+    """When a subnet grows, overlapping neighbours are pushed aside; the grown subnet stays put."""
+    from netgrapher.graph.model import Entity, EntityType, Graph, Link, LinkType
+
+    url, session = live
+
+    def build(a_hosts: int, b_hosts: int) -> Graph:
+        entities: dict = {}
+        links: dict = {}
+        for prefix, n, base in [
+            ("10.1.0.0/24", a_hosts, "10.1.0"),
+            ("10.2.0.0/24", b_hosts, "10.2.0"),
+        ]:
+            sid = f"net:{prefix}"
+            entities[sid] = Entity(
+                sid, EntityType.SUBNET, 1.0, {"prefix": prefix, "kind": "local"}, []
+            )
+            for j in range(2, 2 + n):
+                hid = f"host:{base}.{j}"
+                entities[hid] = Entity(
+                    hid, EntityType.HOST, 1.0, {"ip": f"{base}.{j}", "subnet_id": sid}, []
+                )
+                links[f"lnk:member:{hid}|{sid}"] = Link(
+                    f"lnk:member:{hid}|{sid}", LinkType.MEMBER, hid, sid, 1.0
+                )
+        return Graph(entities, links, {})
+
+    with playwright_api.sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=CHROMIUM, headless=True)
+        page = browser.new_context(
+            viewport={"width": 1300, "height": 850}, bypass_csp=True
+        ).new_page()
+        page.goto(f"{url}/#token={TOKEN}")
+        page.wait_for_function("window.netgrapher && window.netgrapher.cy().nodes().length === 0")
+        session.publish_graph(build(2, 2))
+        page.wait_for_function("window.netgrapher.cy().nodes(':childless').length === 4")
+
+        anchor_before = page.evaluate(
+            "() => window.netgrapher.cy().getElementById('host:10.1.0.2').position()"
+        )
+        # Grow 10.1.0.0/24 to 30 hosts.
+        session.publish_graph(build(30, 2))
+        page.wait_for_function("window.netgrapher.cy().getElementById('host:10.1.0.31').nonempty()")
+
+        def box(sid: str) -> dict:
+            return page.evaluate(
+                f"() => window.netgrapher.cy().getElementById('{sid}')"
+                ".boundingBox({includeLabels: true})"
+            )
+
+        a, b = box("net:10.1.0.0/24"), box("net:10.2.0.0/24")
+        overlap = not (
+            a["x2"] <= b["x1"] or b["x2"] <= a["x1"] or a["y2"] <= b["y1"] or b["y2"] <= a["y1"]
+        )
+        assert not overlap, "the grown subnet still overlaps its neighbour"
+        # The grown subnet's anchor host (lowest IP) did not move.
+        anchor_after = page.evaluate(
+            "() => window.netgrapher.cy().getElementById('host:10.1.0.2').position()"
+        )
+        assert anchor_after == pytest.approx(anchor_before, abs=0.01)
+        browser.close()
