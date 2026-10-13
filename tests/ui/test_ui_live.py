@@ -87,9 +87,14 @@ def test_live_updates(live: tuple[str, Any], tmp_path: Path) -> None:
         session.publish_graph(graph_from_frames(frames))
         page.wait_for_function("window.netgrapher.cy().nodes().length === 10")
         after = leaf_positions(page)
+        # The growing LAN is anchored, so its existing hosts keep their positions. (Top-level
+        # nodes elsewhere may be nudged aside to avoid overlap — that is tested separately.)
+        checked = 0
         for node_id, pos in before.items():
-            if node_id in after:
+            if node_id.startswith("host:192.168.1.") and node_id in after:
                 assert after[node_id] == pytest.approx(pos, abs=0.01), node_id
+                checked += 1
+        assert checked >= 1
         fresh = page.evaluate("() => window.netgrapher.cy().nodes('.fresh').map(n => n.id())")
         added = set(after) - set(before)
         assert added and added <= set(fresh)  # every new node is highlighted
@@ -385,4 +390,75 @@ def test_growing_subnet_nudges_neighbours(live: tuple[str, Any]) -> None:
             "() => window.netgrapher.cy().getElementById('host:10.1.0.2').position()"
         )
         assert anchor_after == pytest.approx(anchor_before, abs=0.01)
+        browser.close()
+
+
+def test_new_host_appends_to_a_moved_subnet_grid(live: tuple[str, Any]) -> None:
+    """After the user moves a network (its hosts become pinned), a newly discovered host appends
+    to the same grid instead of starting a second one."""
+    from netgrapher.graph.model import Entity, EntityType, Graph, Link, LinkType
+
+    url, session = live
+
+    def build(n: int) -> Graph:
+        sid = "net:10.1.0.0/24"
+        entities = {
+            sid: Entity(sid, EntityType.SUBNET, 1.0, {"prefix": "10.1.0.0/24", "kind": "local"}, [])
+        }
+        links = {}
+        for j in range(2, 2 + n):
+            hid = f"host:10.1.0.{j}"
+            entities[hid] = Entity(
+                hid, EntityType.HOST, 1.0, {"ip": f"10.1.0.{j}", "subnet_id": sid}, []
+            )
+            links[f"lnk:member:{hid}|{sid}"] = Link(
+                f"lnk:member:{hid}|{sid}", LinkType.MEMBER, hid, sid, 1.0
+            )
+        return Graph(entities, links, {})
+
+    with playwright_api.sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=CHROMIUM, headless=True)
+        page = browser.new_context(
+            viewport={"width": 1300, "height": 850}, bypass_csp=True
+        ).new_page()
+        page.goto(f"{url}/#token={TOKEN}")
+        page.wait_for_function("window.netgrapher && window.netgrapher.cy().nodes().length === 0")
+        session.publish_graph(build(4))
+        page.wait_for_function("window.netgrapher.cy().nodes(':childless').length === 4")
+
+        # Simulate dragging the whole subnet: move its hosts and pin them (what dragfree does).
+        page.evaluate("""async () => {
+          const cy = window.netgrapher.cy();
+          const kids = cy.getElementById('net:10.1.0.0/24').descendants(':childless');
+          await Promise.all(kids.map(n => {
+            const p = n.position(); const np = {x: p.x + 200, y: p.y + 170};
+            n.position(np);
+            return fetch('/api/annotations/' + encodeURIComponent(n.id()), {
+              method: 'PATCH', headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({position: np, pinned: true})});
+          }));
+        }""")
+        page.wait_for_function(
+            "Object.values(window.netgrapher.state.annotations).filter(a => a.pinned).length === 4"
+        )
+        pinned_last = page.evaluate(
+            "() => window.netgrapher.cy().getElementById('host:10.1.0.5').position()"
+        )
+
+        session.publish_graph(build(6))  # two new hosts appear
+        page.wait_for_function("window.netgrapher.cy().getElementById('host:10.1.0.7').nonempty()")
+
+        pos = page.evaluate(
+            "() => Object.fromEntries(window.netgrapher.cy().nodes('[type=\"host\"]')"
+            ".map(n => [n.id(), {x: Math.round(n.position('x')), y: Math.round(n.position('y'))}]))"
+        )
+        # All six hosts on one row (six columns), evenly stepped — a single grid, not two.
+        ys = {p["y"] for p in pos.values()}
+        xs = sorted(p["x"] for p in pos.values())
+        assert len(ys) == 1, f"hosts split across rows/grids: {pos}"
+        steps = {xs[i + 1] - xs[i] for i in range(len(xs) - 1)}
+        assert steps == {92}, f"hosts not on one aligned grid: {xs}"
+        # The two new hosts continue the moved grid from the last pinned host.
+        assert pos["host:10.1.0.6"]["x"] == pytest.approx(pinned_last["x"] + 92, abs=1)
+        assert pos["host:10.1.0.6"]["y"] == pytest.approx(pinned_last["y"], abs=1)
         browser.close()

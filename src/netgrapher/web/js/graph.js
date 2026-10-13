@@ -99,23 +99,35 @@ function compareHosts(state, a, b) {
 }
 
 /**
- * Lay a subnet's (unpinned) host children out as a grid in strict IP order. The grid is anchored
- * on the lowest-IP child so hosts already placed keep their cells; only higher-IP hosts appended
- * later take new cells (no reshuffling on growth).
+ * Lay a subnet's host children out as a grid in strict IP order (fixed GRID_COLS columns). Every
+ * host's cell is determined solely by its index, so the grid is stable as hosts arrive.
+ *
+ * Pinned hosts (the user dragged the subnet or a host) are never moved; instead the grid origin is
+ * inferred from a pinned host and its cell, so new (unpinned) hosts append into the SAME grid the
+ * user moved — rather than starting a second grid elsewhere.
  */
 export function gridSubnetChildren(cy, state, parent) {
-  const leaves = parent.children().filter((c) => !c.isParent());
-  const movable = leaves.filter((c) => !isPinned(state, c.id())).sort((a, b) => compareHosts(state, a, b));
-  if (movable.length === 0) return;
-  const cols = Math.min(GRID_COLS, movable.length);
-  // Anchor the grid on the lowest-id child: it stays at cell 0, so hosts already placed by an
-  // earlier grid keep their positions and only newly appended (higher-id) hosts take new cells.
-  const anchor = { ...movable[0].position() };
-  movable.forEach((n, i) => {
-    n.position({
-      x: anchor.x + (i % cols) * GRID_STEP_X,
-      y: anchor.y + Math.floor(i / cols) * GRID_STEP_Y,
-    });
+  const all = parent.children().filter((c) => !c.isParent())
+    .sort((a, b) => compareHosts(state, a, b));
+  if (all.length === 0) return;
+  const cell = (i) => ({ col: i % GRID_COLS, row: Math.floor(i / GRID_COLS) });
+
+  // Origin = position of cell 0. Prefer a pinned host (keeps the grid where the user put it);
+  // otherwise anchor on the lowest-IP host so existing hosts keep their cells.
+  const pinnedIndex = all.findIndex((n) => isPinned(state, n.id()));
+  let origin;
+  if (pinnedIndex >= 0) {
+    const c = cell(pinnedIndex);
+    const p = all[pinnedIndex].position();
+    origin = { x: p.x - c.col * GRID_STEP_X, y: p.y - c.row * GRID_STEP_Y };
+  } else {
+    origin = { ...all[0].position() };
+  }
+
+  all.forEach((n, i) => {
+    if (isPinned(state, n.id())) return; // leave pinned hosts exactly where they are
+    const c = cell(i);
+    n.position({ x: origin.x + c.col * GRID_STEP_X, y: origin.y + c.row * GRID_STEP_Y });
   });
 }
 
