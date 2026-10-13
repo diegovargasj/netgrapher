@@ -69,6 +69,20 @@ def test_graph_updates_stream_to_clients() -> None:
     assert payload["seq"] == second["seq"] and payload["live"]["running"] is True
 
 
+def test_only_last_seen_change_sends_nothing() -> None:
+    from synthetic import GW_MAC, LAPTOP_MAC, eth, tcp
+
+    state = AppState()
+    session = LiveSession(state)
+    session.publish_graph(graph_from_frames(FRAMES))
+    seq = state.seq
+    # More traffic from an already-known host to an already-known external IP: only timestamps
+    # advance, no new entity or attribute -> no event.
+    more = [*FRAMES, eth(LAPTOP_MAC, GW_MAC, tcp("192.168.1.10", "8.8.8.8", 41000, 443))]
+    session.publish_graph(graph_from_frames(more))
+    assert state.seq == seq
+
+
 def test_unchanged_graph_sends_nothing() -> None:
     state = AppState()
     session = LiveSession(state)

@@ -66,13 +66,26 @@ def _alias_target(old: Entity, new: Graph, candidates: list[str]) -> str | None:
     return min(routers, default=None)
 
 
+# Attributes that change constantly without being new information. Excluding them from the
+# "updated" test means an active host is not re-sent every tick just because it kept sending
+# traffic — only genuine enrichment (a new name, role, interface, confidence change, …) counts.
+_VOLATILE_ATTRS = ("last_seen",)
+
+
+def _significant(entity: Entity) -> dict[str, Any]:
+    d = entity.to_dict()
+    for key in _VOLATILE_ATTRS:
+        d.pop(key, None)
+    return d
+
+
 def diff_graphs(old: Graph, new: Graph) -> GraphDiff:
     d = GraphDiff()
     for eid, entity in new.entities.items():
         previous = old.entities.get(eid)
         if previous is None:
             d.added.append(eid)
-        elif previous.to_dict() != entity.to_dict():
+        elif _significant(previous) != _significant(entity):
             d.updated.append(eid)
     d.removed = [eid for eid in old.entities if eid not in new.entities]
     for lid, link in new.links.items():

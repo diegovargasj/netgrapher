@@ -65,3 +65,17 @@ def test_annotations_follow_aliases() -> None:
     assert "Also labelled: Branch" in annotations["rtr:10.0.1.1"]["note"]
     assert "host:10.0.0.1" not in annotations and "rtr:10.0.2.1" not in annotations
     assert len(conflicts) == 1
+
+
+def test_volatile_last_seen_is_not_a_change() -> None:
+    a = host("10.0.0.5")
+    a.attrs.update(last_seen=100.0, names=[])
+    b = host("10.0.0.5")
+    b.attrs.update(last_seen=999.0, names=[])
+    # Only last_seen advanced -> not an update, nothing to send.
+    assert not diff_graphs(graph(a), graph(b))
+
+    enriched = host("10.0.0.5")
+    enriched.attrs.update(last_seen=999.0, names=[{"name": "nas", "source": "dns"}])
+    d = diff_graphs(graph(a), graph(enriched))
+    assert d.updated == ["host:10.0.0.5"]  # a genuinely new name counts

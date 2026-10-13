@@ -243,7 +243,11 @@ paths, and latent issues.
   soak test, no high-rate drop test (NFR-2 unvalidated).
 - **Inference recomputes the whole graph every 2s** (`discover.py` tick). On long/busy captures
   this is O(facts) each tick and can fall behind, filling the queue and causing dumpcap drops.
-  Incremental inference is a real TODO (design §5.3).
+  Incremental inference (reusing results across ticks) is a real TODO (design §5.3). *Mitigated:*
+  the live diff now ignores volatile attributes (`last_seen`) so an active host is no longer
+  re-sent to the UI every tick — only genuine enrichment (new name/role/interface) or a new
+  entity produces a WebSocket event (see `graph/diff.py::_significant`). The client has always
+  applied these incrementally (add/update-in-place/remove, never a full re-render).
 - **The UI shows a binary "unconfirmed" tag** (confidence < `CONFIRMED_THRESHOLD` = 0.7 in
   `graph/model.py`), not a percentage; confidence itself is still in the model, exports and the
   report. The threshold is a tunable guess like the rule weights.
