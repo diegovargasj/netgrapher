@@ -188,7 +188,7 @@ In scope:
 | FR-UI-17 | Search MUST match both custom labels and original identifiers. | MUST | v1 |
 | FR-UI-18 | Starting and stopping discovery from the UI. | SHOULD | v2 |
 | FR-UI-20 | The user MUST be able to create entities (network, router, host, generic node) and links from the UI. Created elements are marked user-origin. | MUST | 0.5+ |
-| FR-UI-21 | The user MUST be able to delete entities and links. Deleting a discovered element tombstones it (a live run never resurrects it); deletion cascades to incident links. | MUST | 0.5+ |
+| FR-UI-21 | The user MUST be able to delete entities and links. Deleting a discovered element tombstones it (a live run never resurrects it); deleting a network cascades to its hosts and all incident links. | MUST | 0.5+ |
 | FR-UI-22 | Create and delete MUST support undo/redo and be broadcast to other connected clients. | MUST | 0.5+ |
 | FR-UI-19 | A desktop window wrapper (pywebview). | MAY | v2 |
 
@@ -659,8 +659,9 @@ deleted`; it never mutates the engine graph, so live inference diffs stay stable
   nodes with an `inferred-path` link. Ids are canonical (`net:`/`host:`/`rtr:`) so a created
   element unifies with discovery if the engine later finds it; generic nodes get a `user:` id.
 - **Delete:** the details-panel "Delete" button or the Delete key. A user element is removed; a
-  discovered element is tombstoned in `deleted` so a live run never re-adds it. Deletion cascades
-  to incident links; a deleted subnet leaves its hosts at top level.
+  discovered element is tombstoned in `deleted` so a live run never re-adds it. Deleting a
+  network cascades to the hosts inside it and to all incident links. Hosts in a subnet are laid
+  out in strict numeric-IP order and keep their positions as more hosts arrive.
 - **Undo/redo** covers create and delete. Every edit is broadcast to other connected clients via a
   `user_graph` WebSocket event and persisted on save.
 - Endpoints: `POST /api/entities`, `POST /api/links`, `DELETE /api/entities/{id}`,

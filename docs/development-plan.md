@@ -220,8 +220,8 @@ writes it directly; it emits facts through a callback that enqueues them for the
    annotations (`user_entities`, `user_links`, `deleted`), written only by the UI. The engine is
    still the sole writer of the *discovered* graph; `project/compose.py` merges them into the
    rendered graph: `(discovered + user) − deleted`. Deleting a discovered element is a tombstone
-   (in `deleted`), so a live run never resurrects it; deleting cascades to incident links; a
-   deleted host whose subnet is gone is reparented to top level. Compose never mutates the engine
+   (in `deleted`), so a live run never resurrects it; deleting a network cascades to the hosts
+   inside it and to incident links. Compose never mutates the engine
    graph (it copies), so live inference diffs stay stable. See `server/api.py` CRUD endpoints and
    the `user_graph` WebSocket event.
 

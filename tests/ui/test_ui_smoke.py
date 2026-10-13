@@ -343,12 +343,22 @@ def test_create_delete_and_link_entities(page: Any, server: tuple[str, Any]) -> 
 
 def test_delete_subnet_cascades_in_ui(page: Any, server: tuple[str, Any]) -> None:
     _, state = server
+    hosts = [
+        eid
+        for eid, e in state.project.graph.entities.items()
+        if e.type.value == "host" and e.attrs.get("subnet_id") == "net:10.20.0.0/24"
+    ]
+    assert hosts
     select_node(page, "net:10.20.0.0/24")
     page.get_by_role("button", name="Delete", exact=True).click()
     page.wait_for_function("window.netgrapher.cy().getElementById('net:10.20.0.0/24').empty()")
+    # The hosts inside the network are removed too.
+    for hid in hosts:
+        assert page.evaluate(f"window.netgrapher.cy().getElementById('{hid}').empty()")
     # Its inferred-path link from the gateway is gone too.
     assert not page.evaluate(
         "window.netgrapher.cy().getElementById("
         "'lnk:inferred-path:rtr:192.168.1.1|net:10.20.0.0/24').nonempty()"
     )
     assert "net:10.20.0.0/24" in state.project.deleted
+    assert all(h in state.project.deleted for h in hosts)

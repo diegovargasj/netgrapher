@@ -80,11 +80,30 @@ const GRID_STEP_Y = 44;
 
 const isPinned = (state, id) => Boolean(state.annotations[id]?.pinned);
 
-/** Lay a subnet's (unpinned) host children out as a centred grid, so they never form a strip. */
+// Numeric sort key for a host, so hosts order by IP (192.168.1.2 before 192.168.1.10) rather
+// than lexically. IPv4 -> a single number; anything else falls back to the id string.
+function hostSortKey(state, id) {
+  const ip = state.doc.entities[id]?.ip || id.replace(/^host:/, "");
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(ip);
+  if (!m) return [1, id];
+  return [0, ((+m[1] * 256 + +m[2]) * 256 + +m[3]) * 256 + +m[4]];
+}
+
+function compareHosts(state, a, b) {
+  const [ka, va] = hostSortKey(state, a.id());
+  const [kb, vb] = hostSortKey(state, b.id());
+  if (ka !== kb) return ka - kb;
+  return va < vb ? -1 : va > vb ? 1 : 0;
+}
+
+/**
+ * Lay a subnet's (unpinned) host children out as a grid in strict IP order. The grid is anchored
+ * on the lowest-IP child so hosts already placed keep their cells; only higher-IP hosts appended
+ * later take new cells (no reshuffling on growth).
+ */
 export function gridSubnetChildren(cy, state, parent) {
   const leaves = parent.children().filter((c) => !c.isParent());
-  const movable = leaves.filter((c) => !isPinned(state, c.id())).sort((a, b) =>
-    a.id() < b.id() ? -1 : a.id() > b.id() ? 1 : 0);
+  const movable = leaves.filter((c) => !isPinned(state, c.id())).sort((a, b) => compareHosts(state, a, b));
   if (movable.length === 0) return;
   const cols = Math.min(GRID_COLS, movable.length);
   // Anchor the grid on the lowest-id child: it stays at cell 0, so hosts already placed by an

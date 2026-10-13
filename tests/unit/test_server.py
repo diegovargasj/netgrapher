@@ -225,15 +225,31 @@ def test_create_and_delete_user_entities(client: TestClient, state: AppState) ->
     lid = r.json()["id"]
     assert lid in client.get("/api/project").json()["links"]
 
-    # Deleting the subnet tombstones it and the incident link (cascade).
+    # Deleting the subnet cascades to its hosts and all incident links.
     r = client.delete("/api/entities/net:172.31.0.0/24")
     assert r.status_code == 200
-    assert set(r.json()["deleted"]) == {"net:172.31.0.0/24", lid}
+    assert set(r.json()["deleted"]) == {"net:172.31.0.0/24", "host:172.31.0.9", lid}
     doc = client.get("/api/project").json()
     assert "net:172.31.0.0/24" not in doc["entities"]
+    assert "host:172.31.0.9" not in doc["entities"]  # the host inside is removed too
     assert lid not in doc["links"]
-    # The host survives, now without a parent subnet.
-    assert doc["entities"]["host:172.31.0.9"]["subnet_id"] is None
+
+
+def test_delete_subnet_cascades_to_discovered_hosts(client: TestClient, state: AppState) -> None:
+    doc = client.get("/api/project").json()
+    hosts = [
+        eid
+        for eid, e in doc["entities"].items()
+        if e["type"] == "host" and e.get("subnet_id") == "net:192.168.1.0/24"
+    ]
+    assert hosts  # the office LAN has hosts
+    r = client.delete("/api/entities/net:192.168.1.0/24")
+    assert r.status_code == 200
+    removed = set(r.json()["deleted"])
+    assert "net:192.168.1.0/24" in removed and set(hosts) <= removed
+    after = client.get("/api/project").json()["entities"]
+    assert "net:192.168.1.0/24" not in after
+    assert all(h not in after for h in hosts)
 
 
 def test_delete_discovered_entity_is_a_tombstone(client: TestClient, state: AppState) -> None:

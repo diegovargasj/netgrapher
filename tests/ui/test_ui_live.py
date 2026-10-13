@@ -177,3 +177,59 @@ def test_subnet_hosts_are_gridded_not_a_strip(live: tuple[str, Any]) -> None:
         # Rows should be evenly spaced (a real grid), not scattered.
         assert len(positions) == 15
         browser.close()
+
+
+def test_hosts_are_ordered_by_ip_and_stable(live: tuple[str, Any]) -> None:
+    """Hosts in a subnet lay out in strict numeric-IP order, and existing hosts don't move when
+    a higher-IP host is added."""
+    from netgrapher.graph.model import Entity, EntityType, Graph, Link, LinkType
+
+    url, session = live
+
+    def lan(octets: list[int]) -> Graph:
+        sid = "net:10.0.0.0/24"
+        entities = {
+            sid: Entity(sid, EntityType.SUBNET, 1.0, {"prefix": "10.0.0.0/24", "kind": "local"}, [])
+        }
+        links = {}
+        for i in octets:
+            hid = f"host:10.0.0.{i}"
+            entities[hid] = Entity(
+                hid, EntityType.HOST, 1.0, {"ip": f"10.0.0.{i}", "subnet_id": sid}, []
+            )
+            links[f"lnk:member:{hid}|{sid}"] = Link(
+                f"lnk:member:{hid}|{sid}", LinkType.MEMBER, hid, sid, 1.0
+            )
+        return Graph(entities, links, {})
+
+    with playwright_api.sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=CHROMIUM, headless=True)
+        page = browser.new_context(
+            viewport={"width": 1200, "height": 800}, bypass_csp=True
+        ).new_page()
+        page.goto(f"{url}/#token={TOKEN}")
+        page.wait_for_function("window.netgrapher && window.netgrapher.cy().nodes().length === 0")
+        session.publish_graph(lan([30, 2, 10, 100, 5, 20, 1]))  # arrive out of order
+        page.wait_for_function("window.netgrapher.cy().nodes(':childless').length === 7")
+
+        def host_positions() -> dict[str, dict[str, float]]:
+            return page.evaluate(
+                "() => Object.fromEntries(window.netgrapher.cy().nodes('[type=\"host\"]')"
+                ".map(n => [n.data('id'), n.position()]))"
+            )
+
+        pos = host_positions()
+        # In reading order (sort by y then x) the IPs must be ascending.
+        ordered = sorted(pos.items(), key=lambda kv: (round(kv[1]["y"]), round(kv[1]["x"])))
+        octets = [int(hid.split(".")[-1]) for hid, _ in ordered]
+        assert octets == sorted(octets), octets
+
+        # Adding a higher-IP host must not move the existing ones.
+        session.publish_graph(lan([30, 2, 10, 100, 5, 20, 1, 200]))
+        page.wait_for_function(
+            "window.netgrapher.cy().getElementById('host:10.0.0.200').nonempty()"
+        )
+        after = host_positions()
+        for hid, before_pos in pos.items():
+            assert after[hid] == pytest.approx(before_pos, abs=0.01), hid
+        browser.close()

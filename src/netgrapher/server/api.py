@@ -469,15 +469,32 @@ def _entity_payload(project: Project, entities: dict[str, Entity], eid: str) -> 
 
 
 def _delete(project: Project, eid: str, entities: dict[str, Entity]) -> list[str]:
-    """Tombstone an entity and every link touching it. Returns the ids removed."""
-    removed = [eid]
-    if eid not in project.deleted:
-        project.deleted.append(eid)
+    """Tombstone an entity, its member hosts (for a subnet) and every incident link.
+
+    Returns the ids removed.
+    """
+    removed: list[str] = []
     links = rendered_links(project, entities)
-    for lid, link in links.items():
-        if (link.a == eid or link.b == eid) and lid not in project.deleted:
-            project.deleted.append(lid)
-            removed.append(lid)
+
+    def tombstone_links(target: str) -> None:
+        for lid, link in links.items():
+            if (link.a == target or link.b == target) and lid not in project.deleted:
+                project.deleted.append(lid)
+                removed.append(lid)
+
+    # Deleting a subnet cascades to the hosts inside it.
+    targets = [eid]
+    if entities[eid].type is EntityType.SUBNET:
+        targets += [
+            hid
+            for hid, entity in entities.items()
+            if entity.type is EntityType.HOST and entity.attrs.get("subnet_id") == eid
+        ]
+    for target in targets:
+        if target not in project.deleted:
+            project.deleted.append(target)
+            removed.append(target)
+        tombstone_links(target)
     return removed
 
 
